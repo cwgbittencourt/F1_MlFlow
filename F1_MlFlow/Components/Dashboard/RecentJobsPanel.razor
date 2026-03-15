@@ -1,0 +1,67 @@
+@using F1_MlFlow.Models.Jobs
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <strong>Jobs recentes</strong>
+            <span class="text-muted small">@Jobs.Count jobs</span>
+        </div>
+
+        @if (Jobs.Count == 0)
+        {
+            <div class="text-muted">Nenhum job encontrado.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Tipo</th>
+                            <th>Status</th>
+                            <th>Início</th>
+                            <th>Duração</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var job in Jobs)
+                        {
+                            <tr class="@GetRowClass(job)">
+                                <td>@job.JobId</td>
+                                <td>@job.JobType</td>
+                                <td><span class="badge @GetStatusClass(job.Status)">@job.Status</span></td>
+                                <td>@job.StartedAt?.ToLocalTime().ToString("g")</td>
+                                <td>@(job.Duration?.ToString("0") ?? "-") s</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<JobSummaryDto> Jobs { get; set; } = Array.Empty<JobSummaryDto>();
+
+    private static string GetStatusClass(string? status)
+    {
+        return status?.ToLowerInvariant() switch
+        {
+            "running" => "bg-info",
+            "completed" => "bg-success",
+            "failed" => "bg-danger",
+            "waiting" => "bg-info",
+            "pending" => "bg-secondary",
+            _ => "bg-secondary"
+        };
+    }
+
+    private static string GetRowClass(JobSummaryDto job)
+    {
+        return string.Equals(job.Status, "waiting", StringComparison.OrdinalIgnoreCase)
+            ? "table-info"
+            : string.Empty;
+    }
+}

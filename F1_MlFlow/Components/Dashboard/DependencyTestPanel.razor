@@ -1,0 +1,130 @@
+@inject IMlflowApiService MlflowApi
+@inject IMinioApiService MinioApi
+@inject IJobApiService JobApi
+@inject IDataCatalogApiService DataCatalogApi
+@inject Microsoft.Extensions.Options.IOptions<ApiSettings> ApiOptions
+@inject Microsoft.Extensions.Options.IOptions<BackendDependencySettings> BackendOptions
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <strong>Testes de dependências</strong>
+        <div class="d-flex flex-column gap-2 mt-2">
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <button class="btn btn-sm btn-outline-primary" @onclick="TestMlflowAsync" disabled="@_mlflowTest.IsRunning">Testar MLflow</button>
+                <span class="badge @GetTestBadgeClass(_mlflowTest)">@GetTestLabel(_mlflowTest)</span>
+                <span class="text-muted small">@_mlflowTest.Message</span>
+                <span class="text-muted small">@FormatCheckedAt(_mlflowTest.CheckedAt)</span>
+                <span class="text-muted small">Endpoint: @BuildEndpoint("/mlflow/runs?limit=50")</span>
+            </div>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <button class="btn btn-sm btn-outline-primary" @onclick="TestMinioAsync" disabled="@_minioTest.IsRunning">Testar MinIO</button>
+                <span class="badge @GetTestBadgeClass(_minioTest)">@GetTestLabel(_minioTest)</span>
+                <span class="text-muted small">@_minioTest.Message</span>
+                <span class="text-muted small">@FormatCheckedAt(_minioTest.CheckedAt)</span>
+                <span class="text-muted small">Endpoint: @BuildEndpoint("/minio/objects?limit=200")</span>
+            </div>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <button class="btn btn-sm btn-outline-primary" @onclick="TestJobsAsync" disabled="@_jobsTest.IsRunning">Testar Jobs</button>
+                <span class="badge @GetTestBadgeClass(_jobsTest)">@GetTestLabel(_jobsTest)</span>
+                <span class="text-muted small">@_jobsTest.Message</span>
+                <span class="text-muted small">@FormatCheckedAt(_jobsTest.CheckedAt)</span>
+                <span class="text-muted small">Endpoint: @BuildEndpoint("/jobs")</span>
+            </div>
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <button class="btn btn-sm btn-outline-primary" @onclick="TestCatalogAsync" disabled="@_catalogTest.IsRunning">Testar Catálogo</button>
+                <span class="badge @GetTestBadgeClass(_catalogTest)">@GetTestLabel(_catalogTest)</span>
+                <span class="text-muted small">@_catalogTest.Message</span>
+                <span class="text-muted small">@FormatCheckedAt(_catalogTest.CheckedAt)</span>
+                <span class="text-muted small">Endpoint: @BuildEndpoint($"/catalog/bronze?limit=500&season={CurrentSeason}&check_sync=false")</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private readonly DependencyTestState _mlflowTest = new("MLflow");
+    private readonly DependencyTestState _minioTest = new("MinIO");
+    private readonly DependencyTestState _jobsTest = new("Jobs");
+    private readonly DependencyTestState _catalogTest = new("Catálogo");
+
+    private async Task TestMlflowAsync()
+    {
+        await RunTestAsync(_mlflowTest, async () => await MlflowApi.GetRunsAsync(50));
+    }
+
+    private async Task TestMinioAsync()
+    {
+        await RunTestAsync(_minioTest, async () => await MinioApi.GetObjectsAsync(200));
+    }
+
+    private async Task TestJobsAsync()
+    {
+        await RunTestAsync(_jobsTest, async () => await JobApi.GetRecentJobsAsync());
+    }
+
+    private async Task TestCatalogAsync()
+    {
+        await RunTestAsync(_catalogTest, async () => await DataCatalogApi.GetBronzeAsync(false, 500, CurrentSeason));
+    }
+
+    private async Task RunTestAsync<T>(DependencyTestState state, Func<Task<F1_MlFlow.Models.Common.ApiResult<T>>> action)
+    {
+        state.IsRunning = true;
+        state.Message = "Executando...";
+        StateHasChanged();
+
+        var result = await action.Invoke();
+        state.IsRunning = false;
+        state.CheckedAt = DateTimeOffset.Now;
+        state.IsSuccess = result.IsSuccess;
+        state.Message = result.IsSuccess ? "Conexão OK" : result.ErrorMessage ?? "Falha ao testar conexão";
+    }
+
+    private static string GetTestBadgeClass(DependencyTestState state)
+    {
+        return state.IsSuccess switch
+        {
+            true => "bg-success",
+            false => "bg-danger",
+            _ => "bg-secondary"
+        };
+    }
+
+    private static string GetTestLabel(DependencyTestState state)
+    {
+        return state.IsSuccess switch
+        {
+            true => "OK",
+            false => "Falha",
+            _ => "Aguardando"
+        };
+    }
+
+    private static string FormatCheckedAt(DateTimeOffset? checkedAt)
+    {
+        return checkedAt is null ? string.Empty : $"Último teste: {checkedAt.Value.ToLocalTime():g}";
+    }
+
+    private string BuildEndpoint(string path)
+    {
+        var baseUrl = ApiOptions.Value.BaseUrl?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return path;
+        }
+
+        return $"{baseUrl}{path}";
+    }
+
+    private static int CurrentSeason => DateTimeOffset.Now.Year;
+
+
+    private sealed class DependencyTestState(string name)
+    {
+        public string Name { get; } = name;
+        public bool? IsSuccess { get; set; }
+        public bool IsRunning { get; set; }
+        public string? Message { get; set; }
+        public DateTimeOffset? CheckedAt { get; set; }
+    }
+}

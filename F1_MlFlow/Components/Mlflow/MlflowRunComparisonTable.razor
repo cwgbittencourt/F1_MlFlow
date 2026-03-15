@@ -1,0 +1,75 @@
+@using F1_MlFlow.Models.Mlflow
+
+@if (Runs.Count == 0)
+{
+    <div class="text-muted">Selecione runs para comparar.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-bordered table-sm">
+            <thead>
+                <tr>
+                    <th>Run</th>
+                    @foreach (var metric in MetricKeys)
+                    {
+                        <th>@metric</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var run in Runs)
+                {
+                    <tr>
+                        <td>@run.RunName</td>
+                        @foreach (var metric in MetricKeys)
+                        {
+                            var value = GetMetricValue(run, metric);
+                            var isBest = IsBestMetric(metric, value);
+                            <td class="@(isBest ? "bg-success-subtle" : string.Empty)">@(value?.ToString("0.###") ?? "-")</td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<MlflowRunDto> Runs { get; set; } = Array.Empty<MlflowRunDto>();
+
+    private IReadOnlyList<string> MetricKeys => Runs
+        .SelectMany(run => run.Metrics)
+        .Select(metric => metric.Key)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(metric => metric)
+        .ToList();
+
+    private double? GetMetricValue(MlflowRunDto run, string metricKey)
+    {
+        return run.Metrics.FirstOrDefault(metric => string.Equals(metric.Key, metricKey, StringComparison.OrdinalIgnoreCase))?.Value;
+    }
+
+    private bool IsBestMetric(string metricKey, double? value)
+    {
+        if (value is null)
+        {
+            return false;
+        }
+
+        var values = Runs.Select(run => GetMetricValue(run, metricKey)).Where(val => val.HasValue).Select(val => val!.Value).ToList();
+        if (values.Count == 0)
+        {
+            return false;
+        }
+
+        var lowerIsBetter = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "mae", "rmse", "mape", "davies_bouldin"
+        };
+
+        return lowerIsBetter.Contains(metricKey)
+            ? value == values.Min()
+            : value == values.Max();
+    }
+}

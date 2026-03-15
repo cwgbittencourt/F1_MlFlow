@@ -1,0 +1,170 @@
+@page "/import-season"
+@rendermode InteractiveServer
+@inject IImportSeasonApiService ImportApi
+@inject Microsoft.Extensions.Options.IOptions<ApiSettings> ApiOptions
+
+<h1>Importar Season</h1>
+
+<LoadingBanner IsVisible="_loading" />
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="row g-2">
+            <div class="col-sm-2">
+                <label class="form-label small" for="import-season">Season</label>
+                <input class="form-control form-control-sm" id="import-season" name="import-season" type="number" min="2000" step="1" @bind="_seasonInput" @bind:event="oninput" />
+            </div>
+            <div class="col-sm-3">
+                <label class="form-label small" for="import-session-name">Session Name</label>
+                <input class="form-control form-control-sm" id="import-session-name" name="import-session-name" @bind="_sessionNameInput" @bind:event="oninput" />
+            </div>
+            <div class="col-sm-3">
+                <label class="form-label small" for="import-resume-job-id">Resume Job Id</label>
+                <input class="form-control form-control-sm" id="import-resume-job-id" name="import-resume-job-id" @bind="_resumeJobIdInput" @bind:event="oninput" />
+            </div>
+            <div class="col-sm-2">
+                <label class="form-label small" for="import-include-llm">Include LLM</label>
+                <select class="form-select form-select-sm" id="import-include-llm" name="import-include-llm" @bind="_includeLlmInput">
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                </select>
+            </div>
+            @if (_includeLlm)
+            {
+                <div class="col-sm-12">
+                    <label class="form-label small" for="import-llm-endpoint">LLM Endpoint</label>
+                    <input class="form-control form-control-sm" id="import-llm-endpoint" name="import-llm-endpoint" @bind="_llmEndpointInput" @bind:event="oninput" />
+                </div>
+            }
+        </div>
+        <div class="d-flex flex-wrap justify-content-between align-items-center mt-2 gap-2">
+            <div class="text-muted small">Endpoint: @BuildEndpoint("/import-season")</div>
+            <button class="btn btn-sm btn-outline-primary" @onclick="ImportSeasonAsync" disabled="_loading">Importar</button>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_errorMessage))
+{
+    <div class="alert alert-warning">@_errorMessage</div>
+}
+
+@if (_response is not null)
+{
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <strong>Resultado</strong>
+            <div class="mt-2">
+                <div>Status: <span class="badge @GetStatusBadgeClass(_response.Status)">@(_response.Status ?? "-")</span></div>
+                <div class="mt-1">Job Id: <strong>@(_response.JobId ?? "-")</strong></div>
+                <div class="mt-1 text-muted">Mensagem: @FormatMessage(_response)</div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private string? _seasonInput = DateTimeOffset.Now.Year.ToString();
+    private string _sessionNameInput = "Race";
+    private string _includeLlmInput = "true";
+    private string? _llmEndpointInput = "http://mlflow:5000/gateway/endpoint_mlflow/mlflow/invocations";
+    private string? _resumeJobIdInput;
+    private bool _loading;
+    private string? _errorMessage;
+    private ImportSeasonResponseDto? _response;
+
+    private async Task ImportSeasonAsync()
+    {
+        _errorMessage = null;
+        _response = null;
+
+        if (!int.TryParse(_seasonInput, out var season) || season <= 0)
+        {
+            _errorMessage = "Season é obrigatório e deve ser numérico.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_sessionNameInput))
+        {
+            _errorMessage = "Session Name é obrigatório.";
+            return;
+        }
+
+        _loading = true;
+        _includeLlm = string.Equals(_includeLlmInput, "true", StringComparison.OrdinalIgnoreCase);
+        if (_includeLlm && string.IsNullOrWhiteSpace(_llmEndpointInput))
+        {
+            _loading = false;
+            _errorMessage = "LLM Endpoint é obrigatório quando Include LLM = true.";
+            return;
+        }
+
+        if (!_includeLlm)
+        {
+            _llmEndpointInput = null;
+        }
+
+        var request = new ImportSeasonRequestDto
+        {
+            Season = season,
+            SessionName = _sessionNameInput.Trim(),
+            IncludeLlm = _includeLlm,
+            LlmEndpoint = _includeLlm && !string.IsNullOrWhiteSpace(_llmEndpointInput) ? _llmEndpointInput.Trim() : null,
+            ResumeJobId = string.IsNullOrWhiteSpace(_resumeJobIdInput) ? null : _resumeJobIdInput.Trim()
+        };
+
+        var result = await ImportApi.ImportSeasonAsync(request);
+        if (result.IsSuccess)
+        {
+            _response = result.Data;
+        }
+        else
+        {
+            _errorMessage = result.ErrorMessage;
+        }
+
+        _loading = false;
+    }
+
+    private string BuildEndpoint(string path)
+    {
+        var baseUrl = ApiOptions.Value.BaseUrl?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return path;
+        }
+
+        return $"{baseUrl}{path}";
+    }
+
+    private bool _includeLlm;
+
+    private static string GetStatusBadgeClass(string? status)
+    {
+        return status?.ToLowerInvariant() switch
+        {
+            "queued" => "bg-warning text-dark",
+            "running" => "bg-info",
+            "completed" => "bg-success",
+            "failed" => "bg-danger",
+            _ => "bg-secondary"
+        };
+    }
+
+    private static string FormatMessage(ImportSeasonResponseDto response)
+    {
+        if (!string.IsNullOrWhiteSpace(response.Message))
+        {
+            return response.Message.Trim();
+        }
+
+        return response.Status?.ToLowerInvariant() switch
+        {
+            "queued" => "Job enfileirado. Aguarde o processamento.",
+            "running" => "Job em execução.",
+            "completed" => "Job concluído.",
+            "failed" => "Job falhou. Verifique os logs.",
+            _ => "Sem mensagem retornada pela API."
+        };
+    }
+}

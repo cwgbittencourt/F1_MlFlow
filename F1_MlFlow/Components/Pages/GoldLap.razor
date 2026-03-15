@@ -1,0 +1,232 @@
+@page "/gold-lap"
+@rendermode InteractiveServer
+@using System.Reflection
+@inject IGoldLapApiService GoldLapApi
+@inject Microsoft.Extensions.Options.IOptions<ApiSettings> ApiOptions
+
+<h1>Gold · Consulta de Volta</h1>
+
+<LoadingBanner IsVisible="_loading" />
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="row g-2">
+            <div class="col-sm-2">
+                <input class="form-control form-control-sm" id="gold-lap-season" name="gold-lap-season" placeholder="Season" @bind="_seasonInput" @bind:event="oninput" />
+            </div>
+            <div class="col-sm-3">
+                <input class="form-control form-control-sm" id="gold-lap-meeting-key" name="gold-lap-meeting-key" placeholder="Meeting Key" @bind="_meetingKeyInput" @bind:event="oninput" />
+            </div>
+            <div class="col-sm-4">
+                <input class="form-control form-control-sm" id="gold-lap-meeting-name" name="gold-lap-meeting-name" placeholder="Meeting Name" @bind="_meetingNameInput" @bind:event="oninput" />
+            </div>
+            <div class="col-sm-3">
+                <input class="form-control form-control-sm" id="gold-lap-number" name="gold-lap-number" list="lapNumbers" placeholder="Lap Number"
+                       @bind="_lapNumberInput" @bind:event="oninput" />
+                <datalist id="lapNumbers">
+                    @for (var i = 1; i <= _maxLapNumber; i++)
+                    {
+                        <option value="@i"></option>
+                    }
+                </datalist>
+            </div>
+        </div>
+        <div class="d-flex flex-wrap justify-content-between align-items-center mt-2 gap-2">
+            <div class="text-muted small">
+                Lap_number é obrigatório. Season é obrigatório. Se meeting_key for informado, meeting_name será ignorado.
+            </div>
+            <button class="btn btn-sm btn-outline-primary" @onclick="LoadLapAsync">Buscar</button>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+    <div class="text-muted small">
+        Ano: @_seasonValueLabel · meeting_key: @(_meetingKeyValueLabel) · meeting_name: @(_meetingNameValueLabel)
+    </div>
+    <div class="text-muted small">
+        @LastLatencyLabel · Endpoint: @CurrentEndpoint
+    </div>
+</div>
+
+<SmartDataGrid TItem="GoldRowDto"
+               GridKey="gold-lap"
+               Columns="@_columns"
+               Items="@_items"
+               IsLoading="_loading"
+               ErrorMessage="@_errorMessage"
+               ShowRefresh="true"
+               OnRefresh="LoadLapAsync" />
+
+@code {
+    private List<GoldRowDto> _items = new();
+    private List<GridColumnDefinition> _columns = new();
+    private string? _errorMessage;
+    private bool _loading;
+    private int? _lastLatencyMs;
+
+    private string? _seasonInput = DateTimeOffset.Now.Year.ToString();
+    private string? _meetingKeyInput;
+    private string? _meetingNameInput;
+    private string? _lapNumberInput;
+    private int _maxLapNumber = 80;
+
+    private string _seasonValueLabel => string.IsNullOrWhiteSpace(_seasonInput) ? "-" : _seasonInput!;
+    private string _meetingKeyValueLabel => string.IsNullOrWhiteSpace(_meetingKeyInput) ? "-" : _meetingKeyInput!;
+    private string _meetingNameValueLabel => string.IsNullOrWhiteSpace(_meetingNameInput) ? "-" : _meetingNameInput!;
+
+    protected override void OnInitialized()
+    {
+        _columns = BuildColumns();
+    }
+
+    private async Task LoadLapAsync()
+    {
+        _errorMessage = null;
+
+        if (!int.TryParse(_seasonInput, out var season))
+        {
+            _errorMessage = "Season é obrigatório e deve ser numérico.";
+            return;
+        }
+
+        if (!int.TryParse(_lapNumberInput, out var lapNumber))
+        {
+            _errorMessage = "Lap_number é obrigatório e deve ser numérico.";
+            return;
+        }
+
+        if (lapNumber <= 0 || lapNumber > _maxLapNumber)
+        {
+            _errorMessage = $"Lap_number deve estar entre 1 e {_maxLapNumber}.";
+            return;
+        }
+
+        _loading = true;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var result = await GoldLapApi.GetLapAsync(season, lapNumber, _meetingKeyInput, _meetingNameInput);
+        stopwatch.Stop();
+        _lastLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+
+        if (result.IsSuccess && result.Data is not null)
+        {
+            _items = result.Data.Items.ToList();
+            if (result.Data.MaxLapNumber is not null && result.Data.MaxLapNumber > 0)
+            {
+                _maxLapNumber = result.Data.MaxLapNumber.Value;
+            }
+        }
+        else
+        {
+            _items = new List<GoldRowDto>();
+            _errorMessage = result.ErrorMessage;
+        }
+
+        _loading = false;
+    }
+
+    private string CurrentEndpoint => BuildEndpoint(BuildQueryString());
+
+    private string BuildQueryString()
+    {
+        var parts = new List<string>();
+        if (int.TryParse(_seasonInput, out var season))
+        {
+            parts.Add($"season={season}");
+        }
+
+        if (int.TryParse(_lapNumberInput, out var lapNumber))
+        {
+            parts.Add($"lap_number={lapNumber}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(_meetingKeyInput))
+        {
+            parts.Add($"meeting_key={Uri.EscapeDataString(_meetingKeyInput.Trim())}");
+        }
+        else if (!string.IsNullOrWhiteSpace(_meetingNameInput))
+        {
+            parts.Add($"meeting_name={Uri.EscapeDataString(_meetingNameInput.Trim())}");
+        }
+
+        return parts.Count == 0 ? "/gold/lap" : $"/gold/lap?{string.Join("&", parts)}";
+    }
+
+    private string LastLatencyLabel => _lastLatencyMs is null ? "Latência: -" : $"Latência: {_lastLatencyMs} ms";
+
+    private string BuildEndpoint(string path)
+    {
+        var baseUrl = ApiOptions.Value.BaseUrl?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return path;
+        }
+
+        return $"{baseUrl}{path}";
+    }
+
+    private static List<GridColumnDefinition> BuildColumns()
+    {
+        return typeof(GoldRowDto)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Select(property => new GridColumnDefinition
+            {
+                Key = property.Name,
+                Title = SplitTitle(property.Name),
+                DataType = ResolveDataType(property.PropertyType),
+                Alignment = ResolveAlignment(property.PropertyType)
+            })
+            .ToList();
+    }
+
+    private static string ResolveDataType(Type type)
+    {
+        var underlying = Nullable.GetUnderlyingType(type) ?? type;
+        if (underlying == typeof(int) || underlying == typeof(long) || underlying == typeof(float) || underlying == typeof(double) || underlying == typeof(decimal))
+        {
+            return "number";
+        }
+
+        if (underlying == typeof(DateTime) || underlying == typeof(DateTimeOffset))
+        {
+            return "date";
+        }
+
+        if (underlying == typeof(bool))
+        {
+            return "bool";
+        }
+
+        return "string";
+    }
+
+    private static string ResolveAlignment(Type type)
+    {
+        var dataType = ResolveDataType(type);
+        return dataType == "number" ? "right" : "left";
+    }
+
+    private static string SplitTitle(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return name;
+        }
+
+        var builder = new System.Text.StringBuilder();
+        builder.Append(name[0]);
+
+        for (var i = 1; i < name.Length; i++)
+        {
+            var current = name[i];
+            if (char.IsUpper(current) && !char.IsUpper(name[i - 1]))
+            {
+                builder.Append(' ');
+            }
+
+            builder.Append(current);
+        }
+
+        return builder.ToString();
+    }
+}

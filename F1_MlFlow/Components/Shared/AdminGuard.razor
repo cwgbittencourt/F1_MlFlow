@@ -1,0 +1,89 @@
+@using F1_MlFlow.Models.Common
+@using F1_MlFlow.Services.State
+@inject Microsoft.Extensions.Options.IOptions<AdminSettings> AdminOptions
+@inject IAdminSessionService AdminSession
+
+@if (!AdminOptions.Value.EnableAdminGate)
+{
+    @ChildContent
+}
+else if (_authorized)
+{
+    <div class="d-flex justify-content-end">
+        <button class="btn btn-sm btn-outline-secondary" @onclick="LogoutAsync">Sair do modo admin</button>
+    </div>
+    @ChildContent
+}
+else
+{
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <strong>Acesso administrativo</strong>
+            <div class="text-muted small mt-1">Informe a chave para acessar diagnósticos e testes.</div>
+            <div class="d-flex flex-wrap gap-2 mt-3">
+                <input class="form-control" id="admin-access-key" name="admin-access-key" style="max-width: 240px" type="password" @bind="_accessKey" placeholder="Chave admin" />
+                <button class="btn btn-primary" @onclick="AuthorizeAsync">Entrar</button>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_errorMessage))
+            {
+                <div class="text-danger small mt-2">@_errorMessage</div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool _authorized;
+    private string _accessKey = string.Empty;
+    private string? _errorMessage;
+
+    private bool _initialized;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_initialized)
+        {
+            return;
+        }
+
+        try
+        {
+            _authorized = await AdminSession.IsAuthorizedAsync();
+            _initialized = true;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (InvalidOperationException)
+        {
+            // JS interop unavailable during prerender.
+        }
+    }
+
+    private async Task AuthorizeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_accessKey))
+        {
+            _errorMessage = "Informe a chave admin.";
+            return;
+        }
+
+        if (!string.Equals(_accessKey, AdminOptions.Value.AccessKey, StringComparison.Ordinal))
+        {
+            _errorMessage = "Chave inválida.";
+            return;
+        }
+
+        _errorMessage = null;
+        _authorized = true;
+        await AdminSession.SetAuthorizedAsync(true);
+    }
+
+    private async Task LogoutAsync()
+    {
+        _authorized = false;
+        _accessKey = string.Empty;
+        _errorMessage = null;
+        await AdminSession.ClearAsync();
+    }
+}

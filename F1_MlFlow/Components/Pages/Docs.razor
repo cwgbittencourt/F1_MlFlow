@@ -1,0 +1,103 @@
+@page "/docs/{DocKey?}"
+@rendermode InteractiveServer
+@using Markdig
+@using Microsoft.AspNetCore.Hosting
+@inject IWebHostEnvironment Env
+@inject IJSRuntime JsRuntime
+
+<h1>Documentação</h1>
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="fw-semibold">Documentação</div>
+        <div class="d-flex flex-wrap gap-2 mt-2">
+            <NavLink class="btn btn-sm btn-outline-secondary" href="docs">Aplicação</NavLink>
+            <NavLink class="btn btn-sm btn-outline-secondary" href="docs/api-documentacao">API · Documentação</NavLink>
+            <NavLink class="btn btn-sm btn-outline-secondary" href="docs/api-especificacao">API · Especificação</NavLink>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_errorMessage))
+{
+    <div class="alert alert-warning">@_errorMessage</div>
+}
+else if (_html is null)
+{
+    <div class="text-muted">Carregando documentação...</div>
+}
+else
+{
+    <div class="card shadow-sm">
+        <div class="card-body docs-content">
+            @((MarkupString)_html)
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public string? DocKey { get; set; }
+
+    private string? _html;
+    private string? _errorMessage;
+    private bool _mermaidRendered;
+    private string? _currentDocKey;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var key = string.IsNullOrWhiteSpace(DocKey) ? "app" : DocKey.Trim().ToLowerInvariant();
+        if (string.Equals(_currentDocKey, key, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _currentDocKey = key;
+        _errorMessage = null;
+        _html = null;
+        _mermaidRendered = false;
+
+        var fileName = key switch
+        {
+            "api-documentacao" => "api_documentacao.md",
+            "api-especificacao" => "api_especificacao.md",
+            _ => "README_app.md"
+        };
+
+        try
+        {
+            var path = Path.Combine(Env.ContentRootPath, "doc", fileName);
+            if (!File.Exists(path))
+            {
+                _errorMessage = $"Arquivo não encontrado: {path}";
+                return;
+            }
+
+            var markdown = await File.ReadAllTextAsync(path);
+            var pipeline = new MarkdownPipelineBuilder()
+                .UseAdvancedExtensions()
+                .Build();
+            _html = Markdown.ToHtml(markdown, pipeline);
+            _mermaidRendered = false;
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Falha ao carregar documentação: {ex.Message}";
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_html is not null && !_mermaidRendered)
+        {
+            try
+            {
+                await JsRuntime.InvokeVoidAsync("f1mlflow.renderMermaid");
+                _mermaidRendered = true;
+            }
+            catch (InvalidOperationException)
+            {
+                // JS interop unavailable during prerender.
+            }
+        }
+    }
+}

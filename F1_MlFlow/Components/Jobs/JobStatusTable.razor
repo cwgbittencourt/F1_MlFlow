@@ -1,0 +1,75 @@
+@using F1_MlFlow.Models.Jobs
+
+<div class="table-responsive">
+    <table class="table table-hover">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Tipo</th>
+                <th>Status</th>
+                <th>Criado em</th>
+                <th>Início</th>
+                <th>Duração</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (!Jobs.Any())
+            {
+                <tr>
+                    <td colspan="6" class="text-muted">Nenhum job encontrado.</td>
+                </tr>
+            }
+            else
+            {
+                @foreach (var job in Jobs)
+                {
+                    <tr class="@GetRowClass(job)" @onclick="() => OnSelected.InvokeAsync(job)">
+                        <td>@job.JobId</td>
+                        <td>@job.JobType</td>
+                        <td><span class="badge @GetStatusClass(job.Status)">@job.Status</span></td>
+                        <td>@job.CreatedAt?.ToLocalTime().ToString("g")</td>
+                        <td>@job.StartedAt?.ToLocalTime().ToString("g")</td>
+                        <td>@(job.Duration?.ToString("0") ?? "-") s</td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter] public IEnumerable<JobSummaryDto> Jobs { get; set; } = Array.Empty<JobSummaryDto>();
+    [Parameter] public JobSummaryDto? SelectedJob { get; set; }
+    [Parameter] public EventCallback<JobSummaryDto> OnSelected { get; set; }
+
+    private static string GetStatusClass(string? status)
+    {
+        return status?.ToLowerInvariant() switch
+        {
+            "running" => "bg-info",
+            "completed" => "bg-success",
+            "failed" => "bg-danger",
+            "waiting" => "bg-info",
+            "pending" => "bg-secondary",
+            _ => "bg-secondary"
+        };
+    }
+
+    private string GetRowClass(JobSummaryDto job)
+    {
+        var isSelected = SelectedJob?.JobId == job.JobId;
+        var isWaiting = string.Equals(job.Status, "waiting", StringComparison.OrdinalIgnoreCase);
+
+        if (isSelected && isWaiting)
+        {
+            return "table-active table-info";
+        }
+
+        if (isSelected)
+        {
+            return "table-active";
+        }
+
+        return isWaiting ? "table-info" : string.Empty;
+    }
+}

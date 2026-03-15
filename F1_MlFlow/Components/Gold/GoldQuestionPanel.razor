@@ -1,0 +1,76 @@
+@using F1_MlFlow.Models.Gold
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <strong>Perguntas ao Gold</strong>
+
+        <div class="mt-3">
+            <label class="form-label" for="gold-question">Pergunta</label>
+            <textarea class="form-control" id="gold-question" name="gold-question" rows="3" @bind="Request.Question"></textarea>
+        </div>
+
+        <div class="row mt-3">
+            <div class="col-md-3">
+                <label class="form-label" for="gold-season">Season</label>
+                <input class="form-control" id="gold-season" name="gold-season" type="number" @bind="Request.Season" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="gold-meeting-key">Meeting Key</label>
+                <input class="form-control" id="gold-meeting-key" name="gold-meeting-key" @bind="Request.MeetingKey" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="gold-session-name">Session Name</label>
+                <input class="form-control" id="gold-session-name" name="gold-session-name" @bind="Request.SessionName" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="gold-driver-number">Driver</label>
+                <input class="form-control" id="gold-driver-number" name="gold-driver-number" type="number" @bind="Request.DriverNumber" />
+            </div>
+        </div>
+
+        <button class="btn btn-primary mt-3" @onclick="Ask" disabled="@IsLoading">Perguntar</button>
+
+        @if (IsLoading)
+        {
+            <div class="text-muted mt-2">Consultando...</div>
+        }
+
+        @if (Response is not null)
+        {
+            <div class="alert alert-secondary mt-3">
+                <div class="mb-2"><strong>Resposta</strong></div>
+                <div>@(Response.Answer ?? Response.RawResponse)</div>
+            </div>
+
+            @if (Response.Context?.Count > 0)
+            {
+                <div class="mt-2">
+                    <div class="text-muted small">Contexto aplicado</div>
+                    <ul class="small">
+                        @foreach (var (key, value) in Response.Context)
+                        {
+                            <li><strong>@key</strong>: @value</li>
+                        }
+                    </ul>
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public GoldQuestionRequestDto Request { get; set; } = new();
+    [Parameter] public GoldQuestionResponseDto? Response { get; set; }
+    [Parameter] public bool IsLoading { get; set; }
+    [Parameter] public EventCallback<GoldQuestionRequestDto> OnAsk { get; set; }
+
+    private async Task Ask()
+    {
+        if (string.IsNullOrWhiteSpace(Request.Question))
+        {
+            return;
+        }
+
+        await OnAsk.InvokeAsync(Request);
+    }
+}

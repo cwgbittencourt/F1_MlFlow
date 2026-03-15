@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" role="img" aria-label="Corrida de Formula 1">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1220" />
+      <stop offset="50%" stop-color="#1b2538" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+    <linearGradient id="track" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#111827" />
+      <stop offset="100%" stop-color="#374151" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ef4444" />
+      <stop offset="100%" stop-color="#f97316" />
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="600" fill="url(#bg)" />
+  <path d="M80 440 C 220 360, 360 320, 520 330 C 700 345, 860 420, 1120 260" stroke="url(#track)" stroke-width="120" fill="none" opacity="0.9" />
+  <path d="M100 455 C 240 370, 380 335, 520 345 C 700 360, 860 435, 1120 275" stroke="#9ca3af" stroke-width="4" fill="none" stroke-dasharray="12 14" opacity="0.8" />
+  <g transform="translate(420 240) rotate(-6)">
+    <rect x="0" y="90" width="360" height="50" rx="24" fill="url(#accent)" />
+    <rect x="60" y="60" width="210" height="60" rx="26" fill="#111827" />
+    <rect x="85" y="30" width="160" height="40" rx="18" fill="#1f2937" />
+    <rect x="130" y="15" width="70" height="20" rx="10" fill="#9ca3af" />
+    <circle cx="60" cy="145" r="28" fill="#0f172a" />
+    <circle cx="300" cy="145" r="28" fill="#0f172a" />
+    <circle cx="60" cy="145" r="14" fill="#6b7280" />
+    <circle cx="300" cy="145" r="14" fill="#6b7280" />
+    <rect x="-25" y="105" width="50" height="12" rx="6" fill="#e5e7eb" />
+    <rect x="335" y="105" width="50" height="12" rx="6" fill="#e5e7eb" />
+  </g>
+  <g opacity="0.6">
+    <circle cx="980" cy="120" r="100" fill="#0b1220" />
+    <circle cx="980" cy="120" r="80" fill="#111827" />
+    <circle cx="980" cy="120" r="60" fill="#1f2937" />
+  </g>
+</svg>

@@ -1,0 +1,229 @@
+@page "/mlflow"
+@rendermode InteractiveServer
+@inject IMlflowApiService MlflowApi
+@inject Microsoft.Extensions.Options.IOptions<BackendDependencySettings> BackendOptions
+@inject IUiCacheService UiCache
+@inject Microsoft.Extensions.Options.IOptions<ApiSettings> ApiOptions
+
+<h1>MLflow</h1>
+
+<LoadingBanner IsVisible="_loading" />
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <span class="text-muted">Execuções, métricas e artefatos</span>
+    <div class="d-flex gap-2 align-items-center">
+        <span class="text-muted small">@LastLatencyLabel · Endpoint: @BuildEndpoint("/mlflow/runs?limit=50")</span>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="@(() => LoadRunsAsync(true))">Recarregar tudo</button>
+        <button class="btn btn-sm btn-outline-primary" @onclick="@(() => LoadRunsAsync(true))">Atualizar</button>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_errorMessage))
+{
+    <div class="alert alert-warning">
+        <div>@_errorMessage</div>
+        <div class="mt-2 small text-muted">
+            Para habilitar: configure no backend `MLFLOW_TRACKING_URI`, `MLFLOW_S3_ENDPOINT_URL` e `MLFLOW_EXPERIMENT_ID`.
+        </div>
+        <ul class="small mb-0">
+            <li>MLFLOW_TRACKING_URI: @FormatSetting(BackendOptions.Value.MlflowTrackingUri)</li>
+            <li>MLFLOW_S3_ENDPOINT_URL: @FormatSetting(BackendOptions.Value.MlflowS3EndpointUrl)</li>
+            <li>MLFLOW_EXPERIMENT_ID: @FormatSetting(BackendOptions.Value.MlflowExperimentId)</li>
+        </ul>
+        @if (MissingMlflowSettings.Count > 0)
+        {
+            <div class="small text-danger mt-1">Faltando: @string.Join(", ", MissingMlflowSettings)</div>
+        }
+    </div>
+}
+
+<MlflowRunTable Runs="_runs" SelectedRunIds="_selectedRunIds" OnToggleSelection="ToggleRunSelection" />
+
+<div class="row g-3 mt-1">
+    <div class="col-lg-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <strong>Métricas</strong>
+                @if (SelectedRun is null || SelectedRun.Metrics.Count == 0)
+                {
+                    <div class="text-muted mt-2">Selecione uma run para ver métricas.</div>
+                }
+                else
+                {
+                    <ul class="list-unstyled mt-2">
+                        @foreach (var metric in SelectedRun.Metrics)
+                        {
+                            <li><strong>@metric.Key</strong>: @metric.Value</li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <strong>Parâmetros</strong>
+                @if (SelectedRun is null || SelectedRun.Parameters.Count == 0)
+                {
+                    <div class="text-muted mt-2">Selecione uma run para ver parâmetros.</div>
+                }
+                else
+                {
+                    <ul class="list-unstyled mt-2">
+                        @foreach (var parameter in SelectedRun.Parameters)
+                        {
+                            <li><strong>@parameter.Key</strong>: @parameter.Value</li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <strong>Artefatos</strong>
+                @if (SelectedRun is null || SelectedRun.Artifacts.Count == 0)
+                {
+                    <div class="text-muted mt-2">Selecione uma run para ver artefatos.</div>
+                }
+                else
+                {
+                    <ul class="list-unstyled mt-2">
+                        @foreach (var artifact in SelectedRun.Artifacts)
+                        {
+                            <li><strong>@artifact.Path</strong> (@artifact.FileType)</li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card shadow-sm mt-3">
+    <div class="card-body">
+        <strong>Comparação de modelos</strong>
+        <div class="mt-2">
+            <MlflowRunComparisonTable Runs="SelectedRuns" />
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<MlflowRunDto> _runs = new();
+    private HashSet<string> _selectedRunIds = new(StringComparer.OrdinalIgnoreCase);
+    private string? _errorMessage;
+    private bool _loading;
+    private readonly TimeSpan _cacheDuration = TimeSpan.FromSeconds(60);
+    private DateTimeOffset? _lastLoadedAt;
+    private int? _lastLatencyMs;
+
+    private MlflowRunDto? SelectedRun => _runs.FirstOrDefault(run => _selectedRunIds.Contains(run.RunId));
+    private IReadOnlyList<MlflowRunDto> SelectedRuns => _runs.Where(run => _selectedRunIds.Contains(run.RunId)).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadRunsAsync();
+    }
+
+    private async Task LoadRunsAsync(bool force = false)
+    {
+        TryRestoreCache("mlflow-runs", ref _runs, ref _lastLoadedAt, ref _lastLatencyMs);
+        if (!force && ShouldUseCache())
+        {
+            return;
+        }
+
+        _loading = true;
+        _errorMessage = null;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            var result = await MlflowApi.GetRunsAsync(50);
+            stopwatch.Stop();
+            _lastLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+            if (result.IsSuccess && result.Data is not null)
+            {
+                _runs = result.Data.ToList();
+                _lastLoadedAt = DateTimeOffset.Now;
+                UiCache.Set("mlflow-runs", _runs, _lastLatencyMs, _lastLoadedAt.Value);
+            }
+            else
+            {
+                _errorMessage = result.ErrorMessage;
+            }
+        }
+        finally
+        {
+            if (stopwatch.IsRunning)
+            {
+                stopwatch.Stop();
+                _lastLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+            }
+
+            _loading = false;
+        }
+    }
+
+    private void ToggleRunSelection(string runId)
+    {
+        if (_selectedRunIds.Contains(runId))
+        {
+            _selectedRunIds.Remove(runId);
+        }
+        else
+        {
+            _selectedRunIds.Add(runId);
+        }
+    }
+
+    private IReadOnlyList<string> MissingMlflowSettings => new[]
+    {
+        string.IsNullOrWhiteSpace(BackendOptions.Value.MlflowTrackingUri) ? "MLFLOW_TRACKING_URI" : null,
+        string.IsNullOrWhiteSpace(BackendOptions.Value.MlflowS3EndpointUrl) ? "MLFLOW_S3_ENDPOINT_URL" : null,
+        string.IsNullOrWhiteSpace(BackendOptions.Value.MlflowExperimentId) ? "MLFLOW_EXPERIMENT_ID" : null
+    }.Where(value => value is not null).Select(value => value!).ToList();
+
+    private static string FormatSetting(string? value) => string.IsNullOrWhiteSpace(value) ? "não definido" : value;
+
+    private bool ShouldUseCache()
+    {
+        if (_lastLoadedAt is null || _runs.Count == 0 || !string.IsNullOrWhiteSpace(_errorMessage))
+        {
+            return false;
+        }
+
+        return DateTimeOffset.Now - _lastLoadedAt.Value < _cacheDuration;
+    }
+
+    private string LastLatencyLabel => _lastLatencyMs is null ? "Latência: -" : $"Latência: {_lastLatencyMs} ms";
+
+    private string BuildEndpoint(string path)
+    {
+        var baseUrl = ApiOptions.Value.BaseUrl?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return path;
+        }
+
+        return $"{baseUrl}{path}";
+    }
+
+    private void TryRestoreCache<T>(string key, ref List<T> target, ref DateTimeOffset? loadedAt, ref int? latencyMs)
+    {
+        if (loadedAt is not null)
+        {
+            return;
+        }
+
+        if (UiCache.TryGet(key, out List<T>? cached, out var cachedLatency, out var cachedAt) && cached is not null)
+        {
+            target = cached;
+            loadedAt = cachedAt;
+            latencyMs = cachedLatency;
+        }
+    }
+}

@@ -1,0 +1,165 @@
+@page "/gold-questions"
+@rendermode InteractiveServer
+@inject IGoldQuestionApiService GoldApi
+@inject IJSRuntime JsRuntime
+
+<h1>Perguntas ao Gold</h1>
+
+<LoadingBanner IsVisible="_loading" />
+
+<div class="row g-3">
+    <div class="col-lg-7">
+        <GoldQuestionPanel Request="_request" Response="_response" IsLoading="_loading" OnAsk="AskAsync" />
+        @if (!string.IsNullOrWhiteSpace(_errorMessage))
+        {
+            <div class="alert alert-warning mt-2">@_errorMessage</div>
+        }
+    </div>
+    <div class="col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <strong>Histórico recente</strong>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ClearHistoryAsync" disabled="@(_history.Count == 0)">Limpar histórico</button>
+                </div>
+                @if (_history.Count == 0)
+                {
+                    <div class="text-muted mt-2">Sem perguntas recentes.</div>
+                }
+                else
+                {
+                    <ul class="list-unstyled mt-2">
+                        @foreach (var item in _history)
+                        {
+                            <li class="mb-2">
+                                <div><strong>@item.Question</strong></div>
+                                <div class="text-muted small">@item.AskedAt.ToLocalTime().ToString("g")</div>
+                                @if (!string.IsNullOrWhiteSpace(item.Response?.Answer))
+                                {
+                                    <div class="small">@item.Response?.Answer</div>
+                                }
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const string HistoryStorageKey = "f1mlflow.gold.questions";
+    private readonly GoldQuestionRequestDto _request = new();
+    private GoldQuestionResponseDto? _response;
+    private bool _loading;
+    private string? _errorMessage;
+    private List<GoldQuestionHistoryItem> _history = new();
+
+    private bool _historyLoaded;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_historyLoaded)
+        {
+            return;
+        }
+
+        try
+        {
+            await LoadHistoryAsync();
+            _historyLoaded = true;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (InvalidOperationException)
+        {
+            // JS interop unavailable during prerender.
+        }
+    }
+
+    private async Task AskAsync(GoldQuestionRequestDto request)
+    {
+        _loading = true;
+        _errorMessage = null;
+        _response = null;
+
+        var result = await GoldApi.AskQuestionAsync(request);
+        if (result.IsSuccess)
+        {
+            _response = result.Data;
+            await AddHistoryAsync(request, _response);
+        }
+        else
+        {
+            _errorMessage = result.ErrorMessage;
+        }
+
+        _loading = false;
+    }
+
+    private async Task AddHistoryAsync(GoldQuestionRequestDto request, GoldQuestionResponseDto? response)
+    {
+        var item = new GoldQuestionHistoryItem
+        {
+            Question = request.Question,
+            Response = response,
+            Context = new GoldQuestionRequestDto
+            {
+                Question = request.Question,
+                Season = request.Season,
+                SessionName = request.SessionName,
+                MeetingKey = request.MeetingKey,
+                DriverNumber = request.DriverNumber
+            },
+            AskedAt = DateTimeOffset.Now
+        };
+
+        _history.Insert(0, item);
+        _history = _history.Take(10).ToList();
+        await SaveHistoryAsync();
+    }
+
+    private async Task LoadHistoryAsync()
+    {
+        try
+        {
+            var json = await JsRuntime.InvokeAsync<string?>("localStorage.getItem", HistoryStorageKey);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return;
+            }
+
+            var items = System.Text.Json.JsonSerializer.Deserialize<List<GoldQuestionHistoryItem>>(json);
+            if (items is not null)
+            {
+                _history = items;
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task SaveHistoryAsync()
+    {
+        try
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(_history);
+            await JsRuntime.InvokeVoidAsync("localStorage.setItem", HistoryStorageKey, json);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task ClearHistoryAsync()
+    {
+        _history.Clear();
+        try
+        {
+            await JsRuntime.InvokeVoidAsync("localStorage.removeItem", HistoryStorageKey);
+        }
+        catch
+        {
+        }
+    }
+}

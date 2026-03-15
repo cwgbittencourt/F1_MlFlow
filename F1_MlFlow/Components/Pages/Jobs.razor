@@ -1,0 +1,259 @@
+@page "/jobs"
+@rendermode InteractiveServer
+@inject IJobApiService JobApi
+@inject IUiCacheService UiCache
+@implements IDisposable
+@inject Microsoft.Extensions.Options.IOptions<ApiSettings> ApiOptions
+
+<h1>Jobs</h1>
+
+<LoadingBanner IsVisible="_loading" />
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="row g-2 align-items-center">
+            <div class="col-sm-3">
+                <label class="form-label small" for="jobs-status">Status</label>
+                <select class="form-select form-select-sm" id="jobs-status" name="jobs-status" @bind="_statusFilter">
+                    <option value="">Todos</option>
+                    @foreach (var status in StatusOptions)
+                    {
+                        <option value="@status">@status</option>
+                    }
+                </select>
+            </div>
+            <div class="col-sm-3">
+                <label class="form-label small" for="jobs-type">Tipo</label>
+                <select class="form-select form-select-sm" id="jobs-type" name="jobs-type" @bind="_typeFilter">
+                    <option value="">Todos</option>
+                    @foreach (var type in TypeOptions)
+                    {
+                        <option value="@type">@type</option>
+                    }
+                </select>
+            </div>
+            <div class="col-sm-3">
+                <label class="form-label small" for="jobs-auto-refresh">Auto refresh</label>
+                <div class="d-flex gap-2">
+                    <select class="form-select form-select-sm" id="jobs-auto-refresh" name="jobs-auto-refresh" @bind="_refreshInterval">
+                        <option value="10">10s</option>
+                        <option value="30">30s</option>
+                        <option value="60">60s</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleAutoRefresh">@(_autoRefresh ? "Pausar" : "Ativar")</button>
+                </div>
+            </div>
+            <div class="col-sm-3 d-flex align-items-end">
+                <button class="btn btn-sm btn-outline-primary w-100" @onclick="@(() => LoadJobsAsync(true))">Recarregar tudo</button>
+            </div>
+        </div>
+        <div class="text-muted small mt-2">@LastLatencyLabel · Endpoint: @BuildEndpoint("/jobs")</div>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_errorMessage))
+{
+    <div class="alert alert-warning">@_errorMessage</div>
+}
+
+<div class="row g-3">
+    <div class="col-lg-7">
+        <JobStatusTable Jobs="FilteredJobs" SelectedJob="_selectedJob" OnSelected="OnJobSelected" />
+    </div>
+    <div class="col-lg-5">
+        <JobDetailsPanel Job="_selectedJobDetails" />
+        <div class="mt-3">
+            <JobLogsViewer Logs="_jobLogs" OnLoadMore="LoadMoreLogsAsync" />
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<JobSummaryDto> _jobs = new();
+    private JobSummaryDto? _selectedJob;
+    private JobDetailsDto? _selectedJobDetails;
+    private List<JobLogLineDto> _jobLogs = new();
+    private string? _statusFilter;
+    private string? _typeFilter;
+    private string? _errorMessage;
+    private bool _loading;
+    private bool _autoRefresh;
+    private int _refreshInterval = 30;
+    private int _logLines = 200;
+    private CancellationTokenSource? _refreshTokenSource;
+    private readonly TimeSpan _cacheDuration = TimeSpan.FromSeconds(30);
+    private DateTimeOffset? _lastLoadedAt;
+    private int? _lastLatencyMs;
+
+    private IEnumerable<string> StatusOptions => _jobs.Select(job => job.Status).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct()!;
+    private IEnumerable<string> TypeOptions => _jobs.Select(job => job.JobType).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct()!;
+
+    private IEnumerable<JobSummaryDto> FilteredJobs => _jobs
+        .Where(job => string.IsNullOrWhiteSpace(_statusFilter) || string.Equals(job.Status, _statusFilter, StringComparison.OrdinalIgnoreCase))
+        .Where(job => string.IsNullOrWhiteSpace(_typeFilter) || string.Equals(job.JobType, _typeFilter, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadJobsAsync();
+    }
+
+    private async Task LoadJobsAsync(bool force = false)
+    {
+        TryRestoreCache("jobs-list", ref _jobs, ref _lastLoadedAt, ref _lastLatencyMs);
+        if (!force && ShouldUseCache())
+        {
+            return;
+        }
+
+        _loading = true;
+        _errorMessage = null;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            var result = await JobApi.GetRecentJobsAsync();
+            stopwatch.Stop();
+            _lastLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+            if (result.IsSuccess && result.Data is not null)
+            {
+                _jobs = result.Data.ToList();
+                _lastLoadedAt = DateTimeOffset.Now;
+                UiCache.Set("jobs-list", _jobs, _lastLatencyMs, _lastLoadedAt.Value);
+            }
+            else
+            {
+                _errorMessage = result.ErrorMessage;
+            }
+
+            if (_selectedJob is not null)
+            {
+                await LoadJobDetailsAsync(_selectedJob.JobId);
+            }
+        }
+        finally
+        {
+            if (stopwatch.IsRunning)
+            {
+                stopwatch.Stop();
+                _lastLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+            }
+
+            _loading = false;
+        }
+    }
+
+    private async Task OnJobSelected(JobSummaryDto job)
+    {
+        _selectedJob = job;
+        await LoadJobDetailsAsync(job.JobId);
+    }
+
+    private async Task LoadJobDetailsAsync(string jobId)
+    {
+        var detailsResult = await JobApi.GetJobDetailsAsync(jobId);
+        if (detailsResult.IsSuccess)
+        {
+            _selectedJobDetails = detailsResult.Data;
+        }
+
+        _logLines = 200;
+        await LoadLogsAsync(jobId, _logLines);
+    }
+
+    private async Task LoadLogsAsync(string jobId, int lines)
+    {
+        var logsResult = await JobApi.GetJobLogsAsync(jobId, lines);
+        if (logsResult.IsSuccess && logsResult.Data is not null)
+        {
+            _jobLogs = logsResult.Data.ToList();
+        }
+    }
+
+    private async Task LoadMoreLogsAsync()
+    {
+        if (_selectedJob is null)
+        {
+            return;
+        }
+
+        _logLines += 200;
+        await LoadLogsAsync(_selectedJob.JobId, _logLines);
+    }
+
+    private async Task ToggleAutoRefresh()
+    {
+        _autoRefresh = !_autoRefresh;
+
+        if (_autoRefresh)
+        {
+            _refreshTokenSource?.Cancel();
+            _refreshTokenSource = new CancellationTokenSource();
+            var token = _refreshTokenSource.Token;
+            _ = Task.Run(() => AutoRefreshAsync(token), token);
+        }
+        else
+        {
+            _refreshTokenSource?.Cancel();
+        }
+    }
+
+    private async Task AutoRefreshAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(_refreshInterval), cancellationToken);
+            }
+            catch (TaskCanceledException)
+            {
+                break;
+            }
+
+            await InvokeAsync(() => LoadJobsAsync(true));
+        }
+    }
+
+    private bool ShouldUseCache()
+    {
+        if (_lastLoadedAt is null || _jobs.Count == 0 || !string.IsNullOrWhiteSpace(_errorMessage))
+        {
+            return false;
+        }
+
+        return DateTimeOffset.Now - _lastLoadedAt.Value < _cacheDuration;
+    }
+
+    private string LastLatencyLabel => _lastLatencyMs is null ? "Latência: -" : $"Latência: {_lastLatencyMs} ms";
+
+    private string BuildEndpoint(string path)
+    {
+        var baseUrl = ApiOptions.Value.BaseUrl?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return path;
+        }
+
+        return $"{baseUrl}{path}";
+    }
+
+    private void TryRestoreCache<T>(string key, ref List<T> target, ref DateTimeOffset? loadedAt, ref int? latencyMs)
+    {
+        if (loadedAt is not null)
+        {
+            return;
+        }
+
+        if (UiCache.TryGet(key, out List<T>? cached, out var cachedLatency, out var cachedAt) && cached is not null)
+        {
+            target = cached;
+            loadedAt = cachedAt;
+            latencyMs = cachedLatency;
+        }
+    }
+
+    public void Dispose()
+    {
+        _refreshTokenSource?.Cancel();
+    }
+}

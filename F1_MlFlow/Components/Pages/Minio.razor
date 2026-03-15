@@ -1,0 +1,262 @@
+@page "/minio"
+@rendermode InteractiveServer
+@inject IMinioApiService MinioApi
+@inject IJSRuntime JsRuntime
+@inject Microsoft.Extensions.Options.IOptions<BackendDependencySettings> BackendOptions
+@inject IUiCacheService UiCache
+@inject Microsoft.Extensions.Options.IOptions<ApiSettings> ApiOptions
+
+<h1>MinIO</h1>
+
+<LoadingBanner IsVisible="_loading" />
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="row g-2">
+            <div class="col-sm-3">
+                <input class="form-control form-control-sm" id="minio-bucket" name="minio-bucket" placeholder="Bucket" @bind="_bucketFilter" @bind:event="oninput" />
+            </div>
+            <div class="col-sm-3">
+                <input class="form-control form-control-sm" id="minio-prefix" name="minio-prefix" placeholder="Prefixo" @bind="_prefixFilter" @bind:event="oninput" />
+            </div>
+            <div class="col-sm-3">
+                <select class="form-select form-select-sm" id="minio-layer" name="minio-layer" @bind="_layerFilter">
+                    <option value="">Todas as camadas</option>
+                    <option value="bronze">Bronze</option>
+                    <option value="silver">Silver</option>
+                    <option value="gold">Gold</option>
+                    <option value="artifacts">Artifacts</option>
+                </select>
+            </div>
+            <div class="col-sm-3">
+                <input class="form-control form-control-sm" id="minio-search" name="minio-search" placeholder="Buscar" @bind="_searchTerm" @bind:event="oninput" />
+            </div>
+        </div>
+        <div class="d-flex flex-wrap justify-content-between align-items-center mt-2 gap-2">
+            <div class="d-flex align-items-center gap-2">
+                <span class="text-muted small">Limite</span>
+                <input class="form-control form-control-sm" id="minio-limit" name="minio-limit" style="max-width: 120px;" type="number" min="1" step="1"
+                       placeholder="200" @bind="_limitInput" @bind:event="oninput" />
+            </div>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="ClearFilters">Limpar filtros</button>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex justify-content-between align-items-center mb-2">
+    <span class="text-muted">Objetos e artefatos no data lake</span>
+    <div class="d-flex gap-2 align-items-center">
+        <span class="text-muted small">@LastLatencyLabel · Endpoint: @BuildEndpoint($"/minio/objects?limit={ResolveLimit()}")</span>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="@(() => LoadObjectsAsync(true))">Recarregar tudo</button>
+        <button class="btn btn-sm btn-outline-primary" @onclick="@(() => LoadObjectsAsync(true))">Atualizar</button>
+    </div>
+</div>
+
+<MinioObjectBrowser Items="FilteredObjects"
+                   IsLoading="_loading"
+                   ErrorMessage="@_errorMessage"
+                   SelectedItem="_selectedItem"
+                   OnRowSelected="SelectItem"
+                   ShowRefresh="true"
+                   OnRefresh="@(() => LoadObjectsAsync(true))" />
+
+@if (!string.IsNullOrWhiteSpace(_errorMessage))
+{
+    <div class="alert alert-warning mt-2">
+        <div>@_errorMessage</div>
+        <div class="mt-2 small text-muted">
+            Para habilitar: configure no backend `DATA_LAKE_S3_ENDPOINT` e credenciais S3.
+        </div>
+        <ul class="small mb-0">
+            <li>DATA_LAKE_S3_ENDPOINT: @FormatSetting(BackendOptions.Value.DataLakeS3EndpointUrl)</li>
+            <li>DATA_LAKE_BUCKET: @FormatSetting(BackendOptions.Value.DataLakeBucket)</li>
+            <li>DATA_LAKE_PREFIX: @FormatSetting(BackendOptions.Value.DataLakePrefix)</li>
+            <li>DATA_LAKE_SUBDIRS: @FormatSetting(BackendOptions.Value.DataLakeSubdirs)</li>
+            <li>DATA_LAKE_DOWNLOAD_SUBDIRS: @FormatSetting(BackendOptions.Value.DataLakeDownloadSubdirs)</li>
+        </ul>
+        @if (MissingMinioSettings.Count > 0)
+        {
+            <div class="small text-danger mt-1">Faltando: @string.Join(", ", MissingMinioSettings)</div>
+        }
+    </div>
+}
+
+@if (_selectedItem is not null)
+{
+    <div class="card shadow-sm mt-3">
+        <div class="card-body">
+            <strong>Selecionado</strong>
+            <div class="text-muted small">@_selectedItem.ObjectName</div>
+            <div class="d-flex gap-2 mt-2">
+                <button class="btn btn-sm btn-outline-secondary" @onclick="CopyUri">Copiar URI</button>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="OpenUri">Abrir link</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<MinioObjectDto> _objects = new();
+    private MinioObjectDto? _selectedItem;
+    private bool _loading;
+    private string? _errorMessage;
+
+    private string? _bucketFilter;
+    private string? _prefixFilter;
+    private string? _layerFilter;
+    private string? _searchTerm;
+    private string? _limitInput = "200";
+    private int _lastLimit = 200;
+    private readonly TimeSpan _cacheDuration = TimeSpan.FromSeconds(60);
+    private DateTimeOffset? _lastLoadedAt;
+    private int? _lastLatencyMs;
+
+    private IEnumerable<MinioObjectDto> FilteredObjects => _objects
+        .Where(item => string.IsNullOrWhiteSpace(_bucketFilter) || ContainsInsensitive(item.Bucket, _bucketFilter))
+        .Where(item => string.IsNullOrWhiteSpace(_prefixFilter) || ContainsInsensitive(item.Prefix, _prefixFilter))
+        .Where(item => string.IsNullOrWhiteSpace(_layerFilter) || string.Equals(item.Layer, _layerFilter, StringComparison.OrdinalIgnoreCase))
+        .Where(item => string.IsNullOrWhiteSpace(_searchTerm) || ContainsInsensitive(item.ObjectName, _searchTerm) || ContainsInsensitive(item.StorageUri, _searchTerm));
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadObjectsAsync();
+    }
+
+    private async Task LoadObjectsAsync(bool force = false)
+    {
+        var limit = ResolveLimit();
+        if (limit != _lastLimit)
+        {
+            _lastLoadedAt = null;
+            _objects = new List<MinioObjectDto>();
+            _lastLatencyMs = null;
+            _lastLimit = limit;
+        }
+
+        TryRestoreCache($"minio-objects-{limit}", ref _objects, ref _lastLoadedAt, ref _lastLatencyMs);
+        if (!force && ShouldUseCache())
+        {
+            return;
+        }
+
+        _loading = true;
+        _errorMessage = null;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var result = await MinioApi.GetObjectsAsync(limit);
+        stopwatch.Stop();
+        _lastLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+        if (result.IsSuccess && result.Data is not null)
+        {
+            _objects = result.Data.ToList();
+            _lastLoadedAt = DateTimeOffset.Now;
+            UiCache.Set($"minio-objects-{limit}", _objects, _lastLatencyMs, _lastLoadedAt.Value);
+        }
+        else
+        {
+            _errorMessage = result.ErrorMessage;
+        }
+
+        _loading = false;
+    }
+
+    private void ClearFilters()
+    {
+        _bucketFilter = null;
+        _prefixFilter = null;
+        _layerFilter = null;
+        _searchTerm = null;
+    }
+
+    private void SelectItem(MinioObjectDto item)
+    {
+        _selectedItem = item;
+    }
+
+    private async Task CopyUri()
+    {
+        if (_selectedItem?.StorageUri is null)
+        {
+            return;
+        }
+
+        await JsRuntime.InvokeVoidAsync("navigator.clipboard.writeText", _selectedItem.StorageUri);
+    }
+
+    private async Task OpenUri()
+    {
+        if (_selectedItem?.StorageUri is null)
+        {
+            return;
+        }
+
+        await JsRuntime.InvokeVoidAsync("open", _selectedItem.StorageUri, "_blank");
+    }
+
+    private static bool ContainsInsensitive(string? value, string? term)
+    {
+        if (string.IsNullOrWhiteSpace(value) || string.IsNullOrWhiteSpace(term))
+        {
+            return false;
+        }
+
+        return value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private IReadOnlyList<string> MissingMinioSettings => new[]
+    {
+        string.IsNullOrWhiteSpace(BackendOptions.Value.DataLakeS3EndpointUrl) ? "DATA_LAKE_S3_ENDPOINT" : null,
+        string.IsNullOrWhiteSpace(BackendOptions.Value.DataLakeBucket) ? "DATA_LAKE_BUCKET" : null,
+        string.IsNullOrWhiteSpace(BackendOptions.Value.DataLakePrefix) ? "DATA_LAKE_PREFIX" : null,
+        string.IsNullOrWhiteSpace(BackendOptions.Value.DataLakeSubdirs) ? "DATA_LAKE_SUBDIRS" : null
+    }.Where(value => value is not null).Select(value => value!).ToList();
+
+    private static string FormatSetting(string? value) => string.IsNullOrWhiteSpace(value) ? "não definido" : value;
+
+    private bool ShouldUseCache()
+    {
+        if (_lastLoadedAt is null || _objects.Count == 0 || !string.IsNullOrWhiteSpace(_errorMessage))
+        {
+            return false;
+        }
+
+        return DateTimeOffset.Now - _lastLoadedAt.Value < _cacheDuration;
+    }
+
+    private string LastLatencyLabel => _lastLatencyMs is null ? "Latência: -" : $"Latência: {_lastLatencyMs} ms";
+
+    private int ResolveLimit()
+    {
+        if (int.TryParse(_limitInput, out var limit) && limit > 0)
+        {
+            return limit;
+        }
+
+        return 200;
+    }
+
+    private string BuildEndpoint(string path)
+    {
+        var baseUrl = ApiOptions.Value.BaseUrl?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return path;
+        }
+
+        return $"{baseUrl}{path}";
+    }
+
+    private void TryRestoreCache<T>(string key, ref List<T> target, ref DateTimeOffset? loadedAt, ref int? latencyMs)
+    {
+        if (loadedAt is not null)
+        {
+            return;
+        }
+
+        if (UiCache.TryGet(key, out List<T>? cached, out var cachedLatency, out var cachedAt) && cached is not null)
+        {
+            target = cached;
+            loadedAt = cachedAt;
+            latencyMs = cachedLatency;
+        }
+    }
+}

@@ -1,0 +1,31 @@
+@using F1_MlFlow.Models.Grid
+
+<div class="grid-toolbar d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+        <input class="form-control form-control-sm" name="grid-global-filter" placeholder="Busca global" value="@GlobalFilter" @oninput="OnGlobalFilterInput" />
+        <button class="btn btn-sm btn-outline-secondary" @onclick="OnToggleColumns">Colunas</button>
+        <SortSelector Columns="Columns" SortState="SortState" OnSortChanged="OnSortChanged" />
+    </div>
+
+    @if (ShowRefresh)
+    {
+        <button class="btn btn-sm btn-outline-primary" @onclick="OnRefresh">Atualizar</button>
+    }
+</div>
+
+@code {
+    [Parameter] public string? GlobalFilter { get; set; }
+    [Parameter] public EventCallback<string> OnGlobalFilterChanged { get; set; }
+    [Parameter] public EventCallback OnToggleColumns { get; set; }
+    [Parameter] public EventCallback OnRefresh { get; set; }
+    [Parameter] public bool ShowRefresh { get; set; }
+    [Parameter] public IReadOnlyList<GridColumnDefinition> Columns { get; set; } = Array.Empty<GridColumnDefinition>();
+    [Parameter] public GridSortState SortState { get; set; } = new();
+    [Parameter] public EventCallback<GridSortState> OnSortChanged { get; set; }
+
+    private async Task OnGlobalFilterInput(ChangeEventArgs args)
+    {
+        var value = args.Value?.ToString() ?? string.Empty;
+        await OnGlobalFilterChanged.InvokeAsync(value);
+    }
+}

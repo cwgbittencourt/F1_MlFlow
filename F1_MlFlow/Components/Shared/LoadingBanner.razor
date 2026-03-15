@@ -1,0 +1,11 @@
+@if (IsVisible)
+{
+    <div class="alert alert-info loading-banner" role="status">
+        <strong>@Message</strong>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsVisible { get; set; }
+    [Parameter] public string Message { get; set; } = "Aguarde. Carregamento em andamento.";
+}

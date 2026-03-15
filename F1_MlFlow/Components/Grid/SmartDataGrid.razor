@@ -1,0 +1,550 @@
+@using F1_MlFlow.Models.Grid
+@using F1_MlFlow.Services.State
+@inject IUserGridPreferenceService PreferenceService
+
+@typeparam TItem
+
+<div class="smart-grid card">
+    <div class="card-body">
+        <GridToolbar GlobalFilter="@_queryState.GlobalFilter"
+                     OnGlobalFilterChanged="OnGlobalFilterChanged"
+                     OnToggleColumns="ToggleColumnSelector"
+                     OnRefresh="OnRefreshClicked"
+                     ShowRefresh="ShowRefresh"
+                     Columns="@_columns"
+                     SortState="@_queryState.Sort"
+                     OnSortChanged="OnSortSelectorChanged" />
+
+        @if (_showColumnSelector)
+        {
+            <ColumnSelectorPanel Columns="@_columns"
+                                 DefaultVisibility="@_defaultVisibility"
+                                 OnColumnsChanged="OnColumnsChanged"
+                                 OnClose="ToggleColumnSelector" />
+        }
+
+        @if (IsLoading)
+        {
+            <div class="grid-state grid-loading">
+                <div class="placeholder-glow">
+                    <span class="placeholder col-12"></span>
+                    <span class="placeholder col-10"></span>
+                    <span class="placeholder col-8"></span>
+                </div>
+            </div>
+        }
+        else if (!string.IsNullOrWhiteSpace(ErrorMessage))
+        {
+            <div class="alert alert-danger" role="alert">
+                @ErrorMessage
+            </div>
+        }
+        else if (_pagedItems.Count == 0)
+        {
+            <div class="grid-state grid-empty text-muted">Nenhum dado encontrado.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-hover align-middle smart-grid-table">
+                    <thead>
+                        <tr>
+                            @foreach (var column in _visibleColumns)
+                            {
+                                <th style="width:@column.Width" class="@column.CssClass" @onclick="() => OnHeaderSort(column)">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <span>@column.Title</span>
+                                        @if (column.Sortable)
+                                        {
+                                            <span class="sort-indicator">@GetSortIndicator(column)</span>
+                                        }
+                                    </div>
+                                </th>
+                            }
+                        </tr>
+                        @if (ShowColumnFilters)
+                        {
+                            <tr>
+                                @foreach (var column in _visibleColumns)
+                                {
+                                    <th>
+                                        @if (column.Filterable)
+                                        {
+                                            <input class="form-control form-control-sm"
+                                                   id="@($"grid-{GridKey}-filter-{column.Key}")"
+                                                   name="@($"grid-{GridKey}-filter-{column.Key}")"
+                                                   placeholder="Filtrar..."
+                                                   value="@GetColumnFilter(column.Key)"
+                                                   @oninput="(args) => OnColumnFilterChanged(column.Key, args)" />
+                                        }
+                                    </th>
+                                }
+                            </tr>
+                        }
+                    </thead>
+                    <tbody>
+                        @foreach (var item in _pagedItems)
+                        {
+                            <tr class="@GetSelectedRowClass(item)" @onclick="() => OnRowSelected.InvokeAsync(item)">
+                                @foreach (var column in _visibleColumns)
+                                {
+                                    <td class="@column.CssClass" style="text-align:@column.Alignment">
+                                        @if (ColumnTemplates is not null && ColumnTemplates.TryGetValue(column.Key, out var template))
+                                        {
+                                            @template(item)
+                                        }
+                                        else
+                                        {
+                                            @FormatValue(GetValue(item, column.Key), column)
+                                        }
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        <PaginationBar PageNumber="@_queryState.Pagination.PageNumber"
+                       PageSize="@_queryState.Pagination.PageSize"
+                       TotalItems="@_queryState.Pagination.TotalItems"
+                       PageSizeOptions="PageSizeOptions"
+                       OnPageChanged="OnPageChanged"
+                       OnPageSizeChanged="OnPageSizeChanged" />
+    </div>
+</div>
+
+@code {
+    [Parameter] public string GridKey { get; set; } = default!;
+    [Parameter] public IReadOnlyList<GridColumnDefinition> Columns { get; set; } = Array.Empty<GridColumnDefinition>();
+    [Parameter] public IEnumerable<TItem> Items { get; set; } = Array.Empty<TItem>();
+    [Parameter] public bool IsLoading { get; set; }
+    [Parameter] public string? ErrorMessage { get; set; }
+    [Parameter] public bool ShowColumnFilters { get; set; } = true;
+    [Parameter] public bool ShowRefresh { get; set; }
+    [Parameter] public IReadOnlyList<int> PageSizeOptions { get; set; } = new[] { 10, 20, 50, 100 };
+    [Parameter] public bool UseServerSideSorting { get; set; }
+    [Parameter] public bool UseServerSidePaging { get; set; }
+    [Parameter] public EventCallback<GridQueryState> OnQueryChanged { get; set; }
+    [Parameter] public EventCallback OnRefresh { get; set; }
+    [Parameter] public EventCallback<TItem> OnRowSelected { get; set; }
+    [Parameter] public TItem? SelectedItem { get; set; }
+    [Parameter] public IReadOnlyDictionary<string, RenderFragment<TItem>>? ColumnTemplates { get; set; }
+
+    private readonly Dictionary<string, bool> _defaultVisibility = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, System.Reflection.PropertyInfo?> _propertyCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly GridQueryState _queryState = new();
+    private List<GridColumnDefinition> _columns = new();
+    private List<GridColumnDefinition> _visibleColumns = new();
+    private List<TItem> _pagedItems = new();
+    private bool _showColumnSelector;
+    private bool _initialized;
+    private bool _preferenceLoaded;
+
+    protected override Task OnInitializedAsync()
+    {
+        _initialized = true;
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_columns.Count == 0 || ColumnsChanged())
+        {
+            InitializeColumns();
+        }
+
+        if (!_preferenceLoaded && _columns.Count > 0)
+        {
+            await LoadPreferencesAsync();
+            _preferenceLoaded = true;
+        }
+
+        ApplyLocalQuery();
+    }
+
+    private bool ColumnsChanged()
+    {
+        if (_columns.Count != Columns.Count)
+        {
+            return true;
+        }
+
+        return !_columns.Select(c => c.Key).SequenceEqual(Columns.Select(c => c.Key), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void InitializeColumns()
+    {
+        _columns = Columns.Select(column => new GridColumnDefinition
+        {
+            Key = column.Key,
+            Title = column.Title,
+            Visible = column.Visible,
+            Sortable = column.Sortable,
+            Filterable = column.Filterable,
+            DataType = column.DataType,
+            Format = column.Format,
+            Width = column.Width,
+            CssClass = column.CssClass,
+            Alignment = column.Alignment
+        }).ToList();
+
+        _defaultVisibility.Clear();
+        foreach (var column in _columns)
+        {
+            _defaultVisibility[column.Key] = column.Visible;
+        }
+
+        ApplyPreferenceVisibility();
+        UpdateVisibleColumns();
+    }
+
+    private async Task LoadPreferencesAsync()
+    {
+        if (string.IsNullOrWhiteSpace(GridKey))
+        {
+            return;
+        }
+
+        var preference = await PreferenceService.GetPreferencesAsync(GridKey);
+        if (preference is null)
+        {
+            return;
+        }
+
+        _queryState.Sort.ColumnKey = preference.Sort.ColumnKey;
+        _queryState.Sort.Direction = preference.Sort.Direction;
+        _queryState.Pagination.PageSize = preference.PageSize;
+
+        if (preference.VisibleColumns.Count > 0)
+        {
+            foreach (var column in _columns)
+            {
+                column.Visible = preference.VisibleColumns.Contains(column.Key, StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        UpdateVisibleColumns();
+    }
+
+    private void ApplyPreferenceVisibility()
+    {
+        if (_columns.Count == 0)
+        {
+            return;
+        }
+    }
+
+    private void UpdateVisibleColumns()
+    {
+        _visibleColumns = _columns.Where(c => c.Visible).ToList();
+    }
+
+    private void ApplyLocalQuery()
+    {
+        IEnumerable<TItem> query = Items ?? Array.Empty<TItem>();
+
+        query = ApplyFilters(query);
+        query = ApplySort(query);
+
+        var totalItems = query.Count();
+        _queryState.Pagination.TotalItems = totalItems;
+        _queryState.Pagination.EnsureBounds();
+
+        if (!UseServerSidePaging)
+        {
+            query = query.Skip((_queryState.Pagination.PageNumber - 1) * _queryState.Pagination.PageSize)
+                         .Take(_queryState.Pagination.PageSize);
+        }
+
+        _pagedItems = query.ToList();
+    }
+
+    private IEnumerable<TItem> ApplyFilters(IEnumerable<TItem> query)
+    {
+        if (!string.IsNullOrWhiteSpace(_queryState.GlobalFilter))
+        {
+            var term = _queryState.GlobalFilter.Trim();
+            query = query.Where(item => MatchesGlobalFilter(item, term));
+        }
+
+        foreach (var (key, value) in _queryState.ColumnFilters)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            query = query.Where(item => MatchesColumnFilter(item, key, value));
+        }
+
+        return query;
+    }
+
+    private IEnumerable<TItem> ApplySort(IEnumerable<TItem> query)
+    {
+        if (!_queryState.Sort.HasSort || string.IsNullOrWhiteSpace(_queryState.Sort.ColumnKey))
+        {
+            return query;
+        }
+
+        var key = _queryState.Sort.ColumnKey;
+        var comparer = Comparer<IComparable?>.Create(CompareValues);
+
+        return _queryState.Sort.Direction == GridSortDirection.Desc
+            ? query.OrderByDescending(item => ToComparable(GetValue(item, key)), comparer)
+            : query.OrderBy(item => ToComparable(GetValue(item, key)), comparer);
+    }
+
+    private static int CompareValues(IComparable? left, IComparable? right)
+    {
+        if (left is null && right is null)
+        {
+            return 0;
+        }
+
+        if (left is null)
+        {
+            return 1;
+        }
+
+        if (right is null)
+        {
+            return -1;
+        }
+
+        if (left.GetType() != right.GetType())
+        {
+            return StringComparer.OrdinalIgnoreCase.Compare(left.ToString(), right.ToString());
+        }
+
+        return left.CompareTo(right);
+    }
+
+    private static IComparable? ToComparable(object? value)
+    {
+        return value as IComparable ?? value?.ToString();
+    }
+
+    private bool MatchesGlobalFilter(TItem item, string term)
+    {
+        foreach (var column in _visibleColumns)
+        {
+            var value = GetValue(item, column.Key)?.ToString();
+            if (ContainsInsensitive(value, term))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool MatchesColumnFilter(TItem item, string key, string term)
+    {
+        var value = GetValue(item, key)?.ToString();
+        return ContainsInsensitive(value, term);
+    }
+
+    private static bool ContainsInsensitive(string? source, string term)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return false;
+        }
+
+        return source.Contains(term, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private object? GetValue(TItem item, string key)
+    {
+        if (item is null)
+        {
+            return null;
+        }
+
+        var type = item.GetType();
+        var cacheKey = $"{type.FullName}:{key}";
+        if (!_propertyCache.TryGetValue(cacheKey, out var propertyInfo))
+        {
+            propertyInfo = type.GetProperty(key, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.IgnoreCase);
+            _propertyCache[cacheKey] = propertyInfo;
+        }
+
+        return propertyInfo?.GetValue(item);
+    }
+
+    private string FormatValue(object? value, GridColumnDefinition column)
+    {
+        if (value is null)
+        {
+            return "-";
+        }
+
+        if (!string.IsNullOrWhiteSpace(column.Format) && value is IFormattable formattable)
+        {
+            return formattable.ToString(column.Format, null) ?? "-";
+        }
+
+        return value.ToString() ?? "-";
+    }
+
+    private async Task OnHeaderSort(GridColumnDefinition column)
+    {
+        if (!column.Sortable)
+        {
+            return;
+        }
+
+        if (!string.Equals(_queryState.Sort.ColumnKey, column.Key, StringComparison.OrdinalIgnoreCase))
+        {
+            _queryState.Sort.ColumnKey = column.Key;
+            _queryState.Sort.Direction = GridSortDirection.Asc;
+        }
+        else
+        {
+            _queryState.Sort.Direction = _queryState.Sort.Direction switch
+            {
+                GridSortDirection.None => GridSortDirection.Asc,
+                GridSortDirection.Asc => GridSortDirection.Desc,
+                GridSortDirection.Desc => GridSortDirection.None,
+                _ => GridSortDirection.None
+            };
+
+            if (_queryState.Sort.Direction == GridSortDirection.None)
+            {
+                _queryState.Sort.ColumnKey = null;
+            }
+        }
+
+        await PersistPreferencesAsync();
+        await NotifyQueryChangedAsync();
+    }
+
+    private string GetSortIndicator(GridColumnDefinition column)
+    {
+        if (!string.Equals(_queryState.Sort.ColumnKey, column.Key, StringComparison.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
+        return _queryState.Sort.Direction switch
+        {
+            GridSortDirection.Asc => "▲",
+            GridSortDirection.Desc => "▼",
+            _ => ""
+        };
+    }
+
+    private async Task OnGlobalFilterChanged(string value)
+    {
+        _queryState.GlobalFilter = value;
+        _queryState.Pagination.PageNumber = 1;
+        await NotifyQueryChangedAsync();
+    }
+
+    private async Task OnColumnFilterChanged(string columnKey, ChangeEventArgs args)
+    {
+        var value = args.Value?.ToString();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            _queryState.ColumnFilters.Remove(columnKey);
+        }
+        else
+        {
+            _queryState.ColumnFilters[columnKey] = value;
+        }
+
+        _queryState.Pagination.PageNumber = 1;
+        await NotifyQueryChangedAsync();
+    }
+
+    private async Task OnColumnsChanged()
+    {
+        UpdateVisibleColumns();
+        await PersistPreferencesAsync();
+        StateHasChanged();
+    }
+
+    private void ToggleColumnSelector()
+    {
+        _showColumnSelector = !_showColumnSelector;
+    }
+
+    private async Task OnPageChanged(int page)
+    {
+        _queryState.Pagination.PageNumber = page;
+        await NotifyQueryChangedAsync();
+    }
+
+    private async Task OnPageSizeChanged(int size)
+    {
+        _queryState.Pagination.PageSize = size;
+        _queryState.Pagination.PageNumber = 1;
+        await PersistPreferencesAsync();
+        await NotifyQueryChangedAsync();
+    }
+
+    private async Task NotifyQueryChangedAsync()
+    {
+        ApplyLocalQuery();
+        if (OnQueryChanged.HasDelegate)
+        {
+            await OnQueryChanged.InvokeAsync(_queryState.Clone());
+        }
+    }
+
+    private async Task PersistPreferencesAsync()
+    {
+        if (!_initialized || string.IsNullOrWhiteSpace(GridKey))
+        {
+            return;
+        }
+
+        var preference = new UserGridPreference
+        {
+            GridKey = GridKey,
+            VisibleColumns = _columns.Where(c => c.Visible).Select(c => c.Key).ToList(),
+            Sort = new GridSortState
+            {
+                ColumnKey = _queryState.Sort.ColumnKey,
+                Direction = _queryState.Sort.Direction
+            },
+            PageSize = _queryState.Pagination.PageSize
+        };
+
+        await PreferenceService.SavePreferencesAsync(preference);
+    }
+
+    private async Task OnSortSelectorChanged(GridSortState sortState)
+    {
+        _queryState.Sort.ColumnKey = sortState.ColumnKey;
+        _queryState.Sort.Direction = sortState.Direction;
+        await PersistPreferencesAsync();
+        await NotifyQueryChangedAsync();
+    }
+
+    private async Task OnRefreshClicked()
+    {
+        if (OnRefresh.HasDelegate)
+        {
+            await OnRefresh.InvokeAsync();
+        }
+    }
+
+    private string GetColumnFilter(string columnKey)
+    {
+        return _queryState.ColumnFilters.TryGetValue(columnKey, out var value) ? value ?? string.Empty : string.Empty;
+    }
+
+    private string GetSelectedRowClass(TItem item)
+    {
+        if (SelectedItem is null)
+        {
+            return string.Empty;
+        }
+
+        return EqualityComparer<TItem>.Default.Equals(SelectedItem, item) ? "table-active" : string.Empty;
+    }
+}

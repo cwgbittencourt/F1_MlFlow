@@ -1,0 +1,43 @@
+@using F1_MlFlow.Models.Grid
+
+<div class="d-flex align-items-center gap-1">
+    <select class="form-select form-select-sm" name="grid-sort-column" value="@SortState.ColumnKey" @onchange="OnColumnChanged">
+        <option value="">Ordenar por...</option>
+        @foreach (var column in Columns.Where(c => c.Sortable))
+        {
+            <option value="@column.Key">@column.Title</option>
+        }
+    </select>
+    <select class="form-select form-select-sm" name="grid-sort-direction" value="@SortState.Direction" @onchange="OnDirectionChanged">
+        <option value="@GridSortDirection.None">Sem ordem</option>
+        <option value="@GridSortDirection.Asc">Asc</option>
+        <option value="@GridSortDirection.Desc">Desc</option>
+    </select>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<GridColumnDefinition> Columns { get; set; } = Array.Empty<GridColumnDefinition>();
+    [Parameter] public GridSortState SortState { get; set; } = new();
+    [Parameter] public EventCallback<GridSortState> OnSortChanged { get; set; }
+
+    private async Task OnColumnChanged(ChangeEventArgs args)
+    {
+        SortState.ColumnKey = args.Value?.ToString();
+        if (string.IsNullOrWhiteSpace(SortState.ColumnKey))
+        {
+            SortState.Direction = GridSortDirection.None;
+        }
+
+        await OnSortChanged.InvokeAsync(SortState);
+    }
+
+    private async Task OnDirectionChanged(ChangeEventArgs args)
+    {
+        if (Enum.TryParse<GridSortDirection>(args.Value?.ToString(), out var direction))
+        {
+            SortState.Direction = direction;
+        }
+
+        await OnSortChanged.InvokeAsync(SortState);
+    }
+}

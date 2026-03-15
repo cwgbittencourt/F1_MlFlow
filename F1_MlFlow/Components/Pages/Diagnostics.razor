@@ -1,0 +1,129 @@
+@page "/diagnostics"
+@rendermode InteractiveServer
+@inject IHealthApiService HealthApi
+@inject Microsoft.Extensions.Options.IOptions<BackendDependencySettings> BackendOptions
+@inject Microsoft.Extensions.Options.IOptions<ApiSettings> ApiOptions
+
+<h1>Diagnósticos</h1>
+
+<AdminGuard>
+    <LoadingBanner IsVisible="_loading" />
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <span class="text-muted">Monitoramento e dependências</span>
+        <div class="d-flex gap-2 align-items-center">
+            <span class="text-muted small">@HealthLatencyLabel · Health: @BuildEndpoint("/health")</span>
+            <button class="btn btn-sm btn-outline-primary" @onclick="@(() => LoadAsync(true))">Atualizar</button>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_errorMessage))
+    {
+        <div class="alert alert-warning">@_errorMessage</div>
+    }
+
+    <div class="row g-3">
+        <div class="col-lg-6">
+            <HealthStatusPanel Title="Health da API" Status="@_healthStatus" />
+        </div>
+        <div class="col-lg-6">
+            <div class="text-muted small mb-1">Endpoint: @BuildEndpoint("/health/dependencies")</div>
+            <HealthStatusPanel Title="Dependências" Dependencies="@_dependencies" />
+        </div>
+    </div>
+
+    <div class="row g-3 mt-1">
+        <div class="col-lg-12">
+            <BackendDependenciesPanel Settings="@BackendOptions.Value" />
+        </div>
+    </div>
+
+    <div class="row g-3 mt-1">
+        <div class="col-lg-12">
+            <DependencyTestPanel />
+        </div>
+    </div>
+</AdminGuard>
+
+@code {
+    private HealthStatusDto? _healthStatus;
+    private List<HealthDependencyDto> _dependencies = new();
+    private string? _errorMessage;
+    private bool _loading;
+    private readonly TimeSpan _cacheDuration = TimeSpan.FromSeconds(30);
+    private DateTimeOffset? _lastLoadedAt;
+    private int? _lastLatencyMs;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync(bool force = false)
+    {
+        if (!force && ShouldUseCache())
+        {
+            return;
+        }
+
+        _loading = true;
+        _errorMessage = null;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            var healthResult = await HealthApi.GetHealthAsync();
+            stopwatch.Stop();
+            _lastLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+
+            if (healthResult.IsSuccess)
+            {
+                _healthStatus = healthResult.Data;
+                _lastLoadedAt = DateTimeOffset.Now;
+            }
+            else
+            {
+                _errorMessage = healthResult.ErrorMessage;
+            }
+
+            var dependencyResult = await HealthApi.GetDependenciesAsync();
+            if (dependencyResult.IsSuccess && dependencyResult.Data is not null)
+            {
+                _dependencies = dependencyResult.Data.ToList();
+            }
+        }
+        finally
+        {
+            if (stopwatch.IsRunning)
+            {
+                stopwatch.Stop();
+                _lastLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+            }
+
+            _loading = false;
+        }
+    }
+
+    private bool ShouldUseCache()
+    {
+        if (_lastLoadedAt is null || _healthStatus is null || !string.IsNullOrWhiteSpace(_errorMessage))
+        {
+            return false;
+        }
+
+        return DateTimeOffset.Now - _lastLoadedAt.Value < _cacheDuration;
+    }
+
+    private string HealthLatencyLabel => _lastLatencyMs is null ? "Latência: -" : $"Latência: {_lastLatencyMs} ms";
+
+    private string BuildEndpoint(string path)
+    {
+        var baseUrl = ApiOptions.Value.BaseUrl?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return path;
+        }
+
+        return $"{baseUrl}{path}";
+    }
+}

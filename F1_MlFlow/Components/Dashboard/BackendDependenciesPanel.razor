@@ -1,0 +1,32 @@
+@using F1_MlFlow.Models.Common
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <strong>Dependências do Backend</strong>
+        <div class="text-muted small">Referência para configurar a API Python.</div>
+        <dl class="row mt-2 mb-0">
+            <dt class="col-sm-5">MLFLOW_TRACKING_URI</dt>
+            <dd class="col-sm-7">@Settings.MlflowTrackingUri</dd>
+            <dt class="col-sm-5">MLFLOW_S3_ENDPOINT_URL</dt>
+            <dd class="col-sm-7">@Settings.MlflowS3EndpointUrl</dd>
+            <dt class="col-sm-5">MLFLOW_EXPERIMENT_ID</dt>
+            <dd class="col-sm-7">@Settings.MlflowExperimentId</dd>
+            <dt class="col-sm-5">DATA_LAKE_BUCKET</dt>
+            <dd class="col-sm-7">@Settings.DataLakeBucket</dd>
+            <dt class="col-sm-5">DATA_LAKE_S3_ENDPOINT</dt>
+            <dd class="col-sm-7">@Settings.DataLakeS3EndpointUrl</dd>
+            <dt class="col-sm-5">DATA_LAKE_PREFIX</dt>
+            <dd class="col-sm-7">@Settings.DataLakePrefix</dd>
+            <dt class="col-sm-5">DATA_LAKE_CREATE_BUCKET</dt>
+            <dd class="col-sm-7">@Settings.DataLakeCreateBucket</dd>
+            <dt class="col-sm-5">DATA_LAKE_SUBDIRS</dt>
+            <dd class="col-sm-7">@Settings.DataLakeSubdirs</dd>
+            <dt class="col-sm-5">DATA_LAKE_DOWNLOAD_SUBDIRS</dt>
+            <dd class="col-sm-7">@Settings.DataLakeDownloadSubdirs</dd>
+        </dl>
+    </div>
+</div>
+
+@code {
+    [Parameter] public BackendDependencySettings Settings { get; set; } = new();
+}

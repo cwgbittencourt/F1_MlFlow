@@ -1,0 +1,16 @@
+<div class="kpi-card card shadow-sm">
+    <div class="card-body">
+        <div class="kpi-title text-muted">@Title</div>
+        <div class="kpi-value">@Value</div>
+        @if (!string.IsNullOrWhiteSpace(Subtitle))
+        {
+            <div class="kpi-subtitle text-muted">@Subtitle</div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = default!;
+    [Parameter] public string Value { get; set; } = "-";
+    [Parameter] public string? Subtitle { get; set; }
+}

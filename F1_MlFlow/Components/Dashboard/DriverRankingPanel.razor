@@ -1,0 +1,53 @@
+@using F1_MlFlow.Models.Gold
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <strong>Ranking de pilotos</strong>
+        @if (Profiles.Count == 0)
+        {
+            <div class="text-muted mt-2">Sem perfis disponíveis.</div>
+        }
+        else
+        {
+            <div class="table-responsive mt-2">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Piloto</th>
+                            <th>Lap Mean</th>
+                            <th>Lap Std</th>
+                            <th>Anomalia</th>
+                            <th>Finish %</th>
+                            <th>Pontos</th>
+                            <th>Meetings</th>
+                            <th>Degradation</th>
+                            <th>Delta Pace</th>
+                            <th>Rank %</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var profile in Profiles)
+                        {
+                            <tr>
+                                <td>@(profile.DriverName ?? profile.DriverNumber?.ToString())</td>
+                                <td>@profile.LapMean?.ToString("0.###")</td>
+                                <td>@profile.LapStd?.ToString("0.###")</td>
+                                <td>@profile.AnomalyRate?.ToString("0.##")</td>
+                                <td>@profile.FinishRate?.ToString("0.##")</td>
+                                <td>@profile.PointsTotal?.ToString("0.##")</td>
+                                <td>@profile.MeetingsTotal</td>
+                                <td>@profile.DegradationMean?.ToString("0.###")</td>
+                                <td>@profile.DeltaPaceMean?.ToString("0.###")</td>
+                                <td>@profile.RankPercentileMean?.ToString("0.##")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<DriverProfileDto> Profiles { get; set; } = Array.Empty<DriverProfileDto>();
+}

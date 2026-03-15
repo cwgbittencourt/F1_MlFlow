@@ -1,0 +1,46 @@
+<div class="pagination-bar d-flex flex-wrap align-items-center justify-content-between mt-3">
+    <div class="d-flex align-items-center gap-2">
+        <button class="btn btn-sm btn-outline-secondary" @onclick="() => ChangePage(PageNumber - 1)" disabled="@(PageNumber <= 1)">Anterior</button>
+        <span>Página @PageNumber de @TotalPages</span>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="() => ChangePage(PageNumber + 1)" disabled="@(PageNumber >= TotalPages)">Próxima</button>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+        <span>Itens por página</span>
+        <select class="form-select form-select-sm" name="grid-page-size" value="@PageSize" @onchange="OnPageSizeChangedInternal">
+            @foreach (var size in PageSizeOptions)
+            {
+                <option value="@size">@size</option>
+            }
+        </select>
+        <span class="text-muted">@TotalItems itens</span>
+    </div>
+</div>
+
+@code {
+    [Parameter] public int PageNumber { get; set; }
+    [Parameter] public int PageSize { get; set; }
+    [Parameter] public int TotalItems { get; set; }
+    [Parameter] public IReadOnlyList<int> PageSizeOptions { get; set; } = new[] { 10, 20, 50, 100 };
+    [Parameter] public EventCallback<int> OnPageChanged { get; set; }
+    [Parameter] public EventCallback<int> OnPageSizeChanged { get; set; }
+
+    private int TotalPages => PageSize <= 0 ? 0 : (int)Math.Ceiling(TotalItems / (double)PageSize);
+
+    private async Task ChangePage(int page)
+    {
+        if (page < 1 || page > TotalPages)
+        {
+            return;
+        }
+
+        await OnPageChanged.InvokeAsync(page);
+    }
+
+    private async Task OnPageSizeChangedInternal(ChangeEventArgs args)
+    {
+        if (int.TryParse(args.Value?.ToString(), out var size))
+        {
+            await OnPageSizeChanged.InvokeAsync(size);
+        }
+    }
+}

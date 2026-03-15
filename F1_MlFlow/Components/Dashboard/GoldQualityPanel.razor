@@ -1,0 +1,57 @@
+@using F1_MlFlow.Models.Dashboard
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <strong>Qualidade do Gold</strong>
+        @if (Summary is null)
+        {
+            <div class="text-muted mt-2">Sem dados para análise.</div>
+        }
+        else
+        {
+            <div class="row g-2 mt-2">
+                <div class="col-sm-3"><div class="text-muted small">Rows</div><div>@Summary.Rows</div></div>
+                <div class="col-sm-3"><div class="text-muted small">Null %</div><div>@(Summary.NullPct?.ToString("0.##") ?? "-")</div></div>
+                <div class="col-sm-3"><div class="text-muted small">Valid Laps</div><div>@Summary.ValidLaps</div></div>
+                <div class="col-sm-3"><div class="text-muted small">Discarded</div><div>@Summary.DiscardedLaps</div></div>
+            </div>
+
+            @if (Summary.Groups.Count > 0)
+            {
+                <div class="table-responsive mt-3">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Season</th>
+                                <th>Meeting</th>
+                                <th>Session</th>
+                                <th>Rows</th>
+                                <th>Null %</th>
+                                <th>Valid</th>
+                                <th>Discarded</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var group in Summary.Groups)
+                            {
+                                <tr>
+                                    <td>@group.Season</td>
+                                    <td>@group.Meeting</td>
+                                    <td>@group.Session</td>
+                                    <td>@group.Rows</td>
+                                    <td>@(group.NullPct?.ToString("0.##") ?? "-")</td>
+                                    <td>@group.ValidLaps</td>
+                                    <td>@group.DiscardedLaps</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public GoldQualitySummaryDto? Summary { get; set; }
+}

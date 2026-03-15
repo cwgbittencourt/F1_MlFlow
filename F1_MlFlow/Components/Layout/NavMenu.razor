@@ -1,0 +1,114 @@
+﻿@inject NavigationLoadingState NavLoading
+@inject NavigationManager NavManager
+
+<div class="top-row ps-3 navbar navbar-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="">F1_MlFlow</a>
+    </div>
+</div>
+
+<input type="checkbox" id="nav-toggle" name="nav-toggle" title="Navigation menu" class="navbar-toggler" />
+
+<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
+    <nav class="nav flex-column">
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All" @onclick='() => BeginNavigate("")'>
+                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Home
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="dashboard" @onclick='() => BeginNavigate("dashboard")'>
+                <span class="bi bi-speedometer2-nav-menu" aria-hidden="true"></span> Dashboard
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="data-catalog" @onclick='() => BeginNavigate("data-catalog")'>
+                <span class="bi bi-table-nav-menu" aria-hidden="true"></span> Catálogo de Dados
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="jobs" @onclick='() => BeginNavigate("jobs")'>
+                <span class="bi bi-play-circle-nav-menu" aria-hidden="true"></span> Jobs
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="mlflow" @onclick='() => BeginNavigate("mlflow")'>
+                <span class="bi bi-graph-up-nav-menu" aria-hidden="true"></span> MLflow
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="minio" @onclick='() => BeginNavigate("minio")'>
+                <span class="bi bi-hdd-stack-nav-menu" aria-hidden="true"></span> MinIO
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="gold-questions" @onclick='() => BeginNavigate("gold-questions")'>
+                <span class="bi bi-chat-left-text-nav-menu" aria-hidden="true"></span> Perguntas ao Gold
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="gold-lap" @onclick='() => BeginNavigate("gold-lap")'>
+                <span class="bi bi-table-nav-menu" aria-hidden="true"></span> Gold · Voltas
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="corrida" @onclick='() => BeginNavigate("corrida")'>
+                <span class="bi bi-table-nav-menu" aria-hidden="true"></span> Corrida
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="diagnostics" @onclick='() => BeginNavigate("diagnostics")'>
+                <span class="bi bi-clipboard-data-nav-menu" aria-hidden="true"></span> Diagnósticos
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="docs" @onclick='() => BeginNavigate("docs")'>
+                <span class="bi bi-journal-text-nav-menu" aria-hidden="true"></span> Documentação
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="docs/api-documentacao" @onclick='() => BeginNavigate("docs/api-documentacao")'>
+                <span class="bi bi-journal-text-nav-menu" aria-hidden="true"></span> API · Documentação
+            </NavLink>
+        </div>
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="docs/api-especificacao" @onclick='() => BeginNavigate("docs/api-especificacao")'>
+                <span class="bi bi-journal-text-nav-menu" aria-hidden="true"></span> API · Especificação
+            </NavLink>
+        </div>
+
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="import-season" @onclick='() => BeginNavigate("import-season")'>
+                <span class="bi bi-cloud-arrow-up-nav-menu" aria-hidden="true"></span> Importar Season
+            </NavLink>
+        </div>
+    </nav>
+</div>
+@code {
+    private void BeginNavigate(string href)
+    {
+        var target = NavManager.ToAbsoluteUri(href).ToString();
+        if (string.Equals(NavManager.Uri, target, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        NavLoading.Start(target);
+    }
+}
+
+
+
+
+
+

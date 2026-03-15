@@ -1,0 +1,30 @@
+.smart-grid .grid-state {
+    padding: 1rem 0;
+}
+
+.smart-grid-table th {
+    cursor: pointer;
+    user-select: none;
+}
+
+.smart-grid-table th .sort-indicator {
+    font-size: 0.75rem;
+    opacity: 0.6;
+}
+
+.column-selector {
+    margin-bottom: 1rem;
+}
+
+.column-selector .column-list {
+    max-height: 240px;
+    overflow: auto;
+}
+
+.grid-toolbar input.form-control {
+    min-width: 220px;
+}
+
+.pagination-bar {
+    font-size: 0.9rem;
+}

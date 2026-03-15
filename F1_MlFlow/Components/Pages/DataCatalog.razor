@@ -1,0 +1,619 @@
+@page "/data-catalog"
+@rendermode InteractiveServer
+@inject IDataCatalogApiService DataCatalogApi
+@inject IUserGridPreferenceService PreferenceService
+@inject Microsoft.Extensions.Options.IOptions<BackendDependencySettings> BackendOptions
+@inject IJSRuntime JsRuntime
+@inject IUiCacheService UiCache
+@inject Microsoft.Extensions.Options.IOptions<ApiSettings> ApiOptions
+
+<h1>Catálogo de Dados</h1>
+
+<LoadingBanner IsVisible="IsCatalogLoading" />
+
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="row g-2">
+            <div class="col-sm-2">
+                <input class="form-control form-control-sm" id="catalog-season" name="catalog-season" placeholder="Season" @bind="_seasonFilter" @bind:event="oninput" />
+            </div>
+            <div class="col-sm-2">
+                <button class="btn btn-sm btn-outline-secondary w-100" @onclick="ClearFilters">Limpar filtros</button>
+            </div>
+            <div class="col-sm-2">
+                <input class="form-control form-control-sm" id="catalog-limit" name="catalog-limit" type="number" min="1" step="1"
+                       placeholder="Limite" @bind="_limitInput" @bind:event="oninput" />
+            </div>
+            <div class="col-sm-3">
+                <div class="form-check mt-2">
+                    <input class="form-check-input" type="checkbox" id="check-sync" name="check-sync" @bind="_checkSync" />
+                    <label class="form-check-label small" for="check-sync">Verificar sync (Bronze)</label>
+                </div>
+            </div>
+            <div class="col-sm-3">
+                <div class="form-check mt-2">
+                    <input class="form-check-input" type="checkbox" id="include-schema" name="include-schema" @bind="_includeSchema" />
+                    <label class="form-check-label small" for="include-schema">Incluir schema (Gold)</label>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+    <div class="text-muted small">@CurrentLatencyLabel · Endpoint: @CurrentEndpoint</div>
+    <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-sm btn-outline-primary" @onclick="ExportCsvAsync">Exportar CSV</button>
+        <button class="btn btn-sm btn-outline-secondary" @onclick="ReloadAllAsync">Recarregar tudo</button>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(CurrentError))
+{
+    <div class="alert alert-warning">
+        <div>@CurrentError</div>
+        <div class="mt-2 small text-muted">
+            Para habilitar os catálogos, verifique a API e o acesso ao data lake.
+        </div>
+        <ul class="small mb-0">
+            <li>DATA_LAKE_S3_ENDPOINT: @FormatSetting(BackendOptions.Value.DataLakeS3EndpointUrl)</li>
+            <li>DATA_LAKE_BUCKET: @FormatSetting(BackendOptions.Value.DataLakeBucket)</li>
+            <li>DATA_LAKE_PREFIX: @FormatSetting(BackendOptions.Value.DataLakePrefix)</li>
+            <li>DATA_LAKE_SUBDIRS: @FormatSetting(BackendOptions.Value.DataLakeSubdirs)</li>
+        </ul>
+        @if (MissingDataLakeSettings.Count > 0)
+        {
+            <div class="small text-danger mt-1">Faltando: @string.Join(", ", MissingDataLakeSettings)</div>
+        }
+    </div>
+}
+
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <button class="@GetTabClass(BronzeTab)" @onclick="() => SetActiveTab(BronzeTab)">Bronze</button>
+    </li>
+    <li class="nav-item">
+        <button class="@GetTabClass(SilverTab)" @onclick="() => SetActiveTab(SilverTab)">Silver</button>
+    </li>
+    <li class="nav-item">
+        <button class="@GetTabClass(GoldTab)" @onclick="() => SetActiveTab(GoldTab)">Gold</button>
+    </li>
+</ul>
+
+@if (_activeTab == "bronze")
+{
+    <SmartDataGrid TItem="BronzeRowDto"
+                   GridKey="catalog-bronze"
+                   Columns="@_bronzeColumns"
+                   Items="@FilteredBronze"
+                   IsLoading="_bronzeLoading"
+                   ErrorMessage="@_bronzeError"
+                   ColumnTemplates="@_bronzeTemplates"
+                   ShowRefresh="true"
+                   OnRefresh="@(() => LoadBronzeAsync(true))" />
+}
+else if (_activeTab == "silver")
+{
+    <SmartDataGrid TItem="SilverRowDto"
+                   GridKey="catalog-silver"
+                   Columns="@_silverColumns"
+                   Items="@FilteredSilver"
+                   IsLoading="_silverLoading"
+                   ErrorMessage="@_silverError"
+                   ColumnTemplates="@_silverTemplates"
+                   ShowRefresh="true"
+                   OnRefresh="@(() => LoadSilverAsync(true))" />
+}
+else
+{
+    <SmartDataGrid TItem="GoldRowDto"
+                   GridKey="catalog-gold"
+                   Columns="@_goldColumns"
+                   Items="@FilteredGold"
+                   IsLoading="_goldLoading"
+                   ErrorMessage="@_goldError"
+                   ColumnTemplates="@_goldTemplates"
+                   ShowRefresh="true"
+                   OnRefresh="@(() => LoadGoldAsync(true))" />
+}
+
+@code {
+    private const string TabPreferenceKey = "data-catalog-tabs";
+    private const string BronzeTab = "bronze";
+    private const string SilverTab = "silver";
+    private const string GoldTab = "gold";
+    private string _activeTab = BronzeTab;
+
+    private List<BronzeRowDto> _bronzeItems = new();
+    private List<SilverRowDto> _silverItems = new();
+    private List<GoldRowDto> _goldItems = new();
+
+    private bool _bronzeLoading;
+    private bool _silverLoading;
+    private bool _goldLoading;
+
+    private string? _bronzeError;
+    private string? _silverError;
+    private string? _goldError;
+
+    private string? _seasonFilter = DateTimeOffset.Now.Year.ToString();
+    private bool _checkSync;
+    private bool _includeSchema;
+    private string? _limitInput = "500";
+
+    private readonly TimeSpan _cacheDuration = TimeSpan.FromSeconds(60);
+    private DateTimeOffset? _bronzeLoadedAt;
+    private DateTimeOffset? _silverLoadedAt;
+    private DateTimeOffset? _goldLoadedAt;
+    private int? _bronzeLatencyMs;
+    private int? _silverLatencyMs;
+    private int? _goldLatencyMs;
+    private string? _lastBronzeCacheKey;
+    private string? _lastSilverCacheKey;
+    private string? _lastGoldCacheKey;
+
+    private readonly List<GridColumnDefinition> _bronzeColumns = new()
+    {
+        new GridColumnDefinition { Key = nameof(BronzeRowDto.Season), Title = "Season", Width = "90px" },
+        new GridColumnDefinition { Key = nameof(BronzeRowDto.MeetingKey), Title = "Meeting" },
+        new GridColumnDefinition { Key = nameof(BronzeRowDto.SessionKey), Title = "Session" },
+        new GridColumnDefinition { Key = nameof(BronzeRowDto.DriverNumber), Title = "Driver", Width = "90px" },
+        new GridColumnDefinition { Key = nameof(BronzeRowDto.SourceEndpoint), Title = "Endpoint" },
+        new GridColumnDefinition { Key = nameof(BronzeRowDto.FileName), Title = "Arquivo" },
+        new GridColumnDefinition { Key = nameof(BronzeRowDto.CreatedAt), Title = "Criado" },
+        new GridColumnDefinition { Key = nameof(BronzeRowDto.RecordCount), Title = "Registros" },
+        new GridColumnDefinition { Key = nameof(BronzeRowDto.StoragePath), Title = "Path" },
+        new GridColumnDefinition { Key = nameof(BronzeRowDto.SyncStatus), Title = "Sync" },
+        new GridColumnDefinition { Key = "Actions", Title = "Ações", Sortable = false, Filterable = false, Width = "140px" }
+    };
+
+    private readonly List<GridColumnDefinition> _silverColumns = new()
+    {
+        new GridColumnDefinition { Key = nameof(SilverRowDto.Season), Title = "Season", Width = "90px" },
+        new GridColumnDefinition { Key = nameof(SilverRowDto.MeetingKey), Title = "Meeting" },
+        new GridColumnDefinition { Key = nameof(SilverRowDto.SessionKey), Title = "Session" },
+        new GridColumnDefinition { Key = nameof(SilverRowDto.DriverNumber), Title = "Driver", Width = "90px" },
+        new GridColumnDefinition { Key = nameof(SilverRowDto.DatasetName), Title = "Dataset" },
+        new GridColumnDefinition { Key = nameof(SilverRowDto.NormalizedAt), Title = "Normalizado" },
+        new GridColumnDefinition { Key = nameof(SilverRowDto.SchemaVersion), Title = "Schema" },
+        new GridColumnDefinition { Key = nameof(SilverRowDto.RecordCount), Title = "Registros" },
+        new GridColumnDefinition { Key = nameof(SilverRowDto.NullPct), Title = "Null %" },
+        new GridColumnDefinition { Key = nameof(SilverRowDto.StoragePath), Title = "Path" },
+        new GridColumnDefinition { Key = "Actions", Title = "Ações", Sortable = false, Filterable = false, Width = "140px" }
+    };
+
+    private readonly List<GridColumnDefinition> _goldColumns = new()
+    {
+        new GridColumnDefinition { Key = nameof(GoldRowDto.Season), Title = "Season", Width = "90px" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.MeetingName), Title = "Meeting" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.SessionName), Title = "Session" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.DriverNumber), Title = "Driver" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.DriverName), Title = "Piloto" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.TeamName), Title = "Equipe" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.LapNumber), Title = "Volta" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.LapDuration), Title = "Tempo Volta" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.AvgSpeed), Title = "Vel. Média" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.MaxSpeed), Title = "Vel. Máx" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.DrsPct), Title = "DRS %" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.HasTelemetry), Title = "Telemetry" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.HasTrajectory), Title = "Trajectory" },
+        new GridColumnDefinition { Key = nameof(GoldRowDto.StoragePath), Title = "Path" },
+        new GridColumnDefinition { Key = "Actions", Title = "Ações", Sortable = false, Filterable = false, Width = "140px" }
+    };
+
+    private IReadOnlyDictionary<string, RenderFragment<BronzeRowDto>> _bronzeTemplates = new Dictionary<string, RenderFragment<BronzeRowDto>>(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyDictionary<string, RenderFragment<SilverRowDto>> _silverTemplates = new Dictionary<string, RenderFragment<SilverRowDto>>(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyDictionary<string, RenderFragment<GoldRowDto>> _goldTemplates = new Dictionary<string, RenderFragment<GoldRowDto>>(StringComparer.OrdinalIgnoreCase);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var tabPreference = await PreferenceService.GetPreferencesAsync(TabPreferenceKey);
+        if (!string.IsNullOrWhiteSpace(tabPreference?.LastTab))
+        {
+            _activeTab = tabPreference.LastTab;
+        }
+
+        _bronzeTemplates = new Dictionary<string, RenderFragment<BronzeRowDto>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Actions"] = BronzeActionsTemplate
+        };
+
+        _silverTemplates = new Dictionary<string, RenderFragment<SilverRowDto>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Actions"] = SilverActionsTemplate
+        };
+
+        _goldTemplates = new Dictionary<string, RenderFragment<GoldRowDto>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Actions"] = GoldActionsTemplate
+        };
+
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadBronzeAsync();
+            await LoadSilverAsync();
+            await LoadGoldAsync();
+        }
+    }
+
+    private async Task LoadBronzeAsync(bool force = false)
+    {
+        var cacheKey = BronzeCacheKey;
+        if (!string.Equals(_lastBronzeCacheKey, cacheKey, StringComparison.Ordinal))
+        {
+            _bronzeLoadedAt = null;
+            _bronzeItems.Clear();
+            _lastBronzeCacheKey = cacheKey;
+        }
+        TryRestoreCache(cacheKey, ref _bronzeItems, ref _bronzeLoadedAt, ref _bronzeLatencyMs);
+        if (ShouldUseCache(_bronzeLoadedAt, _bronzeItems.Count, _bronzeError, force))
+        {
+            return;
+        }
+
+        _bronzeLoading = true;
+        _bronzeError = null;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var result = await DataCatalogApi.GetBronzeAsync(_checkSync, ResolveLimit(), ResolveSeason());
+        stopwatch.Stop();
+        _bronzeLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+        if (result.IsSuccess && result.Data is not null)
+        {
+            _bronzeItems = result.Data.ToList();
+            _bronzeLoadedAt = DateTimeOffset.Now;
+            UiCache.Set(cacheKey, _bronzeItems, _bronzeLatencyMs, _bronzeLoadedAt.Value);
+        }
+        else
+        {
+            _bronzeError = result.ErrorMessage;
+        }
+
+        _bronzeLoading = false;
+    }
+
+    private async Task LoadSilverAsync(bool force = false)
+    {
+        var cacheKey = SilverCacheKey;
+        if (!string.Equals(_lastSilverCacheKey, cacheKey, StringComparison.Ordinal))
+        {
+            _silverLoadedAt = null;
+            _silverItems.Clear();
+            _lastSilverCacheKey = cacheKey;
+        }
+        TryRestoreCache(cacheKey, ref _silverItems, ref _silverLoadedAt, ref _silverLatencyMs);
+        if (ShouldUseCache(_silverLoadedAt, _silverItems.Count, _silverError, force))
+        {
+            return;
+        }
+
+        _silverLoading = true;
+        _silverError = null;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var result = await DataCatalogApi.GetSilverAsync(ResolveLimit(), ResolveSeason());
+        stopwatch.Stop();
+        _silverLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+        if (result.IsSuccess && result.Data is not null)
+        {
+            _silverItems = result.Data.ToList();
+            _silverLoadedAt = DateTimeOffset.Now;
+            UiCache.Set(cacheKey, _silverItems, _silverLatencyMs, _silverLoadedAt.Value);
+        }
+        else
+        {
+            _silverError = result.ErrorMessage;
+        }
+
+        _silverLoading = false;
+    }
+
+    private async Task LoadGoldAsync(bool force = false)
+    {
+        var cacheKey = GoldCacheKey;
+        if (!string.Equals(_lastGoldCacheKey, cacheKey, StringComparison.Ordinal))
+        {
+            _goldLoadedAt = null;
+            _goldItems.Clear();
+            _lastGoldCacheKey = cacheKey;
+        }
+        TryRestoreCache(cacheKey, ref _goldItems, ref _goldLoadedAt, ref _goldLatencyMs);
+        if (ShouldUseCache(_goldLoadedAt, _goldItems.Count, _goldError, force))
+        {
+            return;
+        }
+
+        _goldLoading = true;
+        _goldError = null;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var result = await DataCatalogApi.GetGoldAsync(_includeSchema, ResolveLimit(), ResolveSeason());
+        stopwatch.Stop();
+        _goldLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+        if (result.IsSuccess && result.Data is not null)
+        {
+            _goldItems = result.Data.ToList();
+            _goldLoadedAt = DateTimeOffset.Now;
+            UiCache.Set(cacheKey, _goldItems, _goldLatencyMs, _goldLoadedAt.Value);
+        }
+        else
+        {
+            _goldError = result.ErrorMessage;
+        }
+
+        _goldLoading = false;
+    }
+
+    private string GetTabClass(string tab) => _activeTab == tab ? "nav-link active" : "nav-link";
+
+    private async Task SetActiveTab(string tab)
+    {
+        _activeTab = tab;
+        await PreferenceService.SavePreferencesAsync(new UserGridPreference
+        {
+            GridKey = TabPreferenceKey,
+            LastTab = tab
+        });
+    }
+
+    private void ClearFilters()
+    {
+        _seasonFilter = DateTimeOffset.Now.Year.ToString();
+    }
+
+    private IEnumerable<BronzeRowDto> FilteredBronze => ApplySeasonFilter(_bronzeItems,
+        item => item.Season?.ToString());
+
+    private IEnumerable<SilverRowDto> FilteredSilver => ApplySeasonFilter(_silverItems,
+        item => item.Season?.ToString());
+
+    private IEnumerable<GoldRowDto> FilteredGold => ApplySeasonFilter(_goldItems,
+        item => item.Season?.ToString());
+
+    private IEnumerable<TItem> ApplySeasonFilter<TItem>(IEnumerable<TItem> source,
+        Func<TItem, string?> seasonSelector)
+    {
+        var query = source;
+
+        if (!string.IsNullOrWhiteSpace(_seasonFilter))
+        {
+            query = query.Where(item => ContainsInsensitive(seasonSelector(item), _seasonFilter));
+        }
+
+        return query;
+    }
+
+    private static bool ContainsInsensitive(string? value, string? term)
+    {
+        if (string.IsNullOrWhiteSpace(value) || string.IsNullOrWhiteSpace(term))
+        {
+            return false;
+        }
+
+        return value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string? CurrentError => _activeTab switch
+    {
+        "bronze" => _bronzeError,
+        "silver" => _silverError,
+        "gold" => _goldError,
+        _ => null
+    };
+
+    private string CurrentLatencyLabel => _activeTab switch
+    {
+        "bronze" => FormatLatency(_bronzeLatencyMs),
+        "silver" => FormatLatency(_silverLatencyMs),
+        "gold" => FormatLatency(_goldLatencyMs),
+        _ => "Latência: -"
+    };
+
+    private bool IsCatalogLoading => _bronzeLoading || _silverLoading || _goldLoading;
+
+    private string CurrentEndpoint => _activeTab switch
+    {
+        "bronze" => BuildEndpoint($"/catalog/bronze?limit={ResolveLimit()}&season={ResolveSeason()}&check_sync={_checkSync.ToString().ToLowerInvariant()}"),
+        "silver" => BuildEndpoint($"/catalog/silver?limit={ResolveLimit()}&season={ResolveSeason()}"),
+        "gold" => BuildEndpoint(BuildGoldEndpoint()),
+        _ => BuildEndpoint("/catalog")
+    };
+
+    private IReadOnlyList<string> MissingDataLakeSettings => new[]
+    {
+        string.IsNullOrWhiteSpace(BackendOptions.Value.DataLakeS3EndpointUrl) ? "DATA_LAKE_S3_ENDPOINT" : null,
+        string.IsNullOrWhiteSpace(BackendOptions.Value.DataLakeBucket) ? "DATA_LAKE_BUCKET" : null,
+        string.IsNullOrWhiteSpace(BackendOptions.Value.DataLakePrefix) ? "DATA_LAKE_PREFIX" : null,
+        string.IsNullOrWhiteSpace(BackendOptions.Value.DataLakeSubdirs) ? "DATA_LAKE_SUBDIRS" : null
+    }.Where(value => value is not null).Select(value => value!).ToList();
+
+    private static string FormatSetting(string? value) => string.IsNullOrWhiteSpace(value) ? "não definido" : value;
+
+    private string BuildEndpoint(string path)
+    {
+        var baseUrl = ApiOptions.Value.BaseUrl?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return path;
+        }
+
+        return $"{baseUrl}{path}";
+    }
+
+    private static string FormatLatency(int? latencyMs)
+    {
+        return latencyMs is null ? "Latência: -" : $"Latência: {latencyMs} ms";
+    }
+
+    private int ResolveLimit()
+    {
+        if (int.TryParse(_limitInput, out var limit) && limit > 0)
+        {
+            return limit;
+        }
+
+        return 500;
+    }
+
+    private bool ShouldUseCache(DateTimeOffset? loadedAt, int count, string? error, bool force)
+    {
+        if (force || count == 0 || !string.IsNullOrWhiteSpace(error) || loadedAt is null)
+        {
+            return false;
+        }
+
+        return DateTimeOffset.Now - loadedAt.Value < _cacheDuration;
+    }
+
+    private void TryRestoreCache<T>(string key, ref List<T> target, ref DateTimeOffset? loadedAt, ref int? latencyMs)
+    {
+        if (loadedAt is not null)
+        {
+            return;
+        }
+
+        if (UiCache.TryGet(key, out List<T>? cached, out var cachedLatency, out var cachedAt) && cached is not null)
+        {
+            target = cached;
+            loadedAt = cachedAt;
+            latencyMs = cachedLatency;
+        }
+    }
+
+    private async Task ReloadAllAsync()
+    {
+        await LoadBronzeAsync(true);
+        await LoadSilverAsync(true);
+        await LoadGoldAsync(true);
+    }
+
+    private string BronzeCacheKey => $"catalog-bronze-limit{ResolveLimit()}-season{ResolveSeason()}-sync{_checkSync.ToString().ToLowerInvariant()}";
+    private string SilverCacheKey => $"catalog-silver-limit{ResolveLimit()}-season{ResolveSeason()}";
+    private string GoldCacheKey => $"catalog-gold-limit{ResolveLimit()}-season{ResolveSeason()}-schema{_includeSchema.ToString().ToLowerInvariant()}";
+
+    private string BuildGoldEndpoint()
+    {
+        var limit = ResolveLimit();
+        var season = ResolveSeason();
+        return _includeSchema
+            ? $"/catalog/gold?limit={limit}&season={season}&include_schema=true"
+            : $"/catalog/gold?limit={limit}&season={season}";
+    }
+
+    private int ResolveSeason()
+    {
+        if (int.TryParse(_seasonFilter, out var season) && season > 0)
+        {
+            return season;
+        }
+
+        return DateTimeOffset.Now.Year;
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        var (items, columns, fileName) = _activeTab switch
+        {
+            "bronze" => (FilteredBronze.Cast<object>().ToList(), _bronzeColumns, "catalog-bronze.csv"),
+            "silver" => (FilteredSilver.Cast<object>().ToList(), _silverColumns, "catalog-silver.csv"),
+            "gold" => (FilteredGold.Cast<object>().ToList(), _goldColumns, "catalog-gold.csv"),
+            _ => (new List<object>(), new List<GridColumnDefinition>(), "catalog.csv")
+        };
+
+        var exportColumns = columns.Where(column => !string.Equals(column.Key, "Actions", StringComparison.OrdinalIgnoreCase)).ToList();
+        var csv = BuildCsv(items, exportColumns);
+        await JsRuntime.InvokeVoidAsync("f1mlflow.downloadFile", fileName, csv);
+    }
+
+    private static string BuildCsv(IReadOnlyList<object> items, IReadOnlyList<GridColumnDefinition> columns)
+    {
+        var builder = new System.Text.StringBuilder();
+        builder.AppendLine(string.Join(",", columns.Select(column => EscapeCsv(column.Title))));
+
+        foreach (var item in items)
+        {
+            var values = columns.Select(column => EscapeCsv(GetPropertyValue(item, column.Key)));
+            builder.AppendLine(string.Join(",", values));
+        }
+
+        return builder.ToString();
+    }
+
+    private static string GetPropertyValue(object item, string propertyName)
+    {
+        var property = item.GetType().GetProperty(propertyName);
+        var value = property?.GetValue(item);
+        if (value is DateTimeOffset dateTimeOffset)
+        {
+            return dateTimeOffset.ToString("O");
+        }
+
+        if (value is DateTime dateTime)
+        {
+            return dateTime.ToString("O");
+        }
+
+        return value?.ToString() ?? string.Empty;
+    }
+
+    private static string EscapeCsv(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "\"\"";
+        }
+
+        var escaped = value.Replace("\"", "\"\"");
+        return $"\"{escaped}\"";
+    }
+
+    private RenderFragment<BronzeRowDto> BronzeActionsTemplate => item => @<div class="d-flex gap-1">
+        @{
+            var path = item.StoragePath;
+        }
+        <button class="btn btn-sm btn-outline-secondary" disabled="@string.IsNullOrWhiteSpace(path)" @onclick="() => CopyPathAsync(path)">Copiar</button>
+        <button class="btn btn-sm btn-outline-secondary" disabled="@(!IsOpenable(path))" @onclick="() => OpenPathAsync(path)">Abrir</button>
+    </div>;
+
+    private RenderFragment<SilverRowDto> SilverActionsTemplate => item => @<div class="d-flex gap-1">
+        @{
+            var path = item.StoragePath;
+        }
+        <button class="btn btn-sm btn-outline-secondary" disabled="@string.IsNullOrWhiteSpace(path)" @onclick="() => CopyPathAsync(path)">Copiar</button>
+        <button class="btn btn-sm btn-outline-secondary" disabled="@(!IsOpenable(path))" @onclick="() => OpenPathAsync(path)">Abrir</button>
+    </div>;
+
+    private RenderFragment<GoldRowDto> GoldActionsTemplate => item => @<div class="d-flex gap-1">
+        @{
+            var path = item.StoragePath;
+        }
+        <button class="btn btn-sm btn-outline-secondary" disabled="@string.IsNullOrWhiteSpace(path)" @onclick="() => CopyPathAsync(path)">Copiar</button>
+        <button class="btn btn-sm btn-outline-secondary" disabled="@(!IsOpenable(path))" @onclick="() => OpenPathAsync(path)">Abrir</button>
+    </div>;
+
+    private async Task CopyPathAsync(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        await JsRuntime.InvokeVoidAsync("navigator.clipboard.writeText", path);
+    }
+
+    private async Task OpenPathAsync(string? path)
+    {
+        if (!IsOpenable(path))
+        {
+            return;
+        }
+
+        await JsRuntime.InvokeVoidAsync("open", path, "_blank");
+    }
+
+    private static bool IsOpenable(string? path)
+    {
+        return !string.IsNullOrWhiteSpace(path) && path.StartsWith("http", StringComparison.OrdinalIgnoreCase);
+    }
+}

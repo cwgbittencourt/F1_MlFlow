@@ -1,0 +1,29 @@
+@using F1_MlFlow.Models.Jobs
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <strong>Logs</strong>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="OnLoadMore">Carregar mais linhas</button>
+        </div>
+
+        @if (Logs.Count == 0)
+        {
+            <div class="text-muted">Nenhum log disponível.</div>
+        }
+        else
+        {
+            <div class="log-viewer">
+                @foreach (var line in Logs)
+                {
+                    <div class="log-line">@line.Line</div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<JobLogLineDto> Logs { get; set; } = Array.Empty<JobLogLineDto>();
+    [Parameter] public EventCallback OnLoadMore { get; set; }
+}

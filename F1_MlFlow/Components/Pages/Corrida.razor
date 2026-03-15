@@ -1,0 +1,28 @@
+@page "/corrida"
+@rendermode InteractiveServer
+@inject Microsoft.Extensions.Options.IOptions<ApiSettings> ApiOptions
+
+<h1>Corrida</h1>
+
+<div class="text-muted small mb-2">Endpoint: @CorridaEndpoint</div>
+
+<div class="card shadow-sm">
+    <div class="card-body p-0">
+        <iframe title="Corrida" src="@CorridaEndpoint" class="corrida-frame"></iframe>
+    </div>
+</div>
+
+@code {
+    private string CorridaEndpoint => BuildEndpoint("/ui/gold-lap");
+
+    private string BuildEndpoint(string path)
+    {
+        var baseUrl = ApiOptions.Value.BaseUrl?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(baseUrl))
+        {
+            return path;
+        }
+
+        return $"{baseUrl}{path}";
+    }
+}

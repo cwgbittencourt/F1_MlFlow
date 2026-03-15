@@ -1,0 +1,36 @@
+@using F1_MlFlow.Models.Minio
+@using F1_MlFlow.Models.Grid
+
+<SmartDataGrid TItem="MinioObjectDto"
+               GridKey="@GridKey"
+               Columns="@_columns"
+               Items="Items"
+               IsLoading="IsLoading"
+               ErrorMessage="@ErrorMessage"
+               ShowRefresh="ShowRefresh"
+               OnRefresh="OnRefresh"
+               SelectedItem="SelectedItem"
+               OnRowSelected="OnRowSelected" />
+
+@code {
+    [Parameter] public string GridKey { get; set; } = "minio-objects";
+    [Parameter] public IEnumerable<MinioObjectDto> Items { get; set; } = Array.Empty<MinioObjectDto>();
+    [Parameter] public bool IsLoading { get; set; }
+    [Parameter] public string? ErrorMessage { get; set; }
+    [Parameter] public bool ShowRefresh { get; set; }
+    [Parameter] public EventCallback OnRefresh { get; set; }
+    [Parameter] public MinioObjectDto? SelectedItem { get; set; }
+    [Parameter] public EventCallback<MinioObjectDto> OnRowSelected { get; set; }
+
+    private readonly List<GridColumnDefinition> _columns = new()
+    {
+        new GridColumnDefinition { Key = nameof(MinioObjectDto.Bucket), Title = "Bucket", Width = "160px" },
+        new GridColumnDefinition { Key = nameof(MinioObjectDto.Prefix), Title = "Prefixo", Width = "160px" },
+        new GridColumnDefinition { Key = nameof(MinioObjectDto.ObjectName), Title = "Objeto" },
+        new GridColumnDefinition { Key = nameof(MinioObjectDto.ObjectType), Title = "Tipo", Width = "120px" },
+        new GridColumnDefinition { Key = nameof(MinioObjectDto.Size), Title = "Tamanho", Width = "120px" },
+        new GridColumnDefinition { Key = nameof(MinioObjectDto.LastModified), Title = "Última modificação", Width = "180px" },
+        new GridColumnDefinition { Key = nameof(MinioObjectDto.Layer), Title = "Camada", Width = "120px" },
+        new GridColumnDefinition { Key = nameof(MinioObjectDto.StorageUri), Title = "URI" }
+    };
+}

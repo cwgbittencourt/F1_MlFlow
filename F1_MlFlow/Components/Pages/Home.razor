@@ -1,0 +1,239 @@
+@page "/"
+@rendermode InteractiveServer
+@using System.Diagnostics
+@inject IHealthApiService HealthApi
+@inject IJobApiService JobApi
+@inject IMlflowApiService MlflowApi
+@inject IDataCatalogApiService DataCatalogApi
+
+<PageTitle>Home</PageTitle>
+
+<section class="home-hero cinematic">
+    <div class="hero-backdrop" aria-hidden="true">
+        <div class="backdrop-glow"></div>
+        <div class="backdrop-grid"></div>
+        <div class="backdrop-scan"></div>
+        <div class="backdrop-streaks"></div>
+        <div class="backdrop-dust"></div>
+    </div>
+    <div class="hero-content">
+        <span class="hero-badge">F1 MLFlow · Race Control</span>
+        <h1>Seu QG analítico para uma temporada inteira.</h1>
+        <p>
+            Telemetria, jobs, artefatos e perguntas ao gold reunidos em um cockpit digital.
+            Tudo pronto para acelerar decisões técnicas volta a volta.
+        </p>
+        <div class="hero-actions">
+            <a class="btn btn-primary" href="dashboard">Ir ao Dashboard</a>
+            <a class="btn btn-outline-light" href="data-catalog">Explorar Catálogo</a>
+            <a class="btn btn-outline-light" href="diagnostics">Diagnósticos</a>
+        </div>
+        <div class="hero-metrics">
+            <div>
+                <span>Bronze</span>
+                <strong>Replay & Auditoria</strong>
+            </div>
+            <div>
+                <span>Silver</span>
+                <strong>Qualidade & Normalização</strong>
+            </div>
+            <div>
+                <span>Gold</span>
+                <strong>Voltas prontas para ML</strong>
+            </div>
+        </div>
+        <div class="hero-strip">
+            <span>MLflow Tracking</span>
+            <span>MinIO Data Lake</span>
+            <span>Jobs Async</span>
+            <span>Health & Diagnostics</span>
+        </div>
+        <div class="hero-kpis">
+            <div class="kpi-card">
+                <span>Latência</span>
+                <strong>@FormatLatency(_healthLatencyMs)</strong>
+                <small>health da API</small>
+            </div>
+            <div class="kpi-card">
+                <span>Jobs ativos</span>
+                <strong>@FormatCount(_activeJobs)</strong>
+                <small>em execução + pendentes</small>
+            </div>
+            <div class="kpi-card">
+                <span>MLflow runs</span>
+                <strong>@FormatCount(_mlflowRuns)</strong>
+                <small>últimos @MlflowLimit</small>
+            </div>
+            <div class="kpi-card">
+                <span>Bronze</span>
+                <strong>@FormatCount(_bronzeCount)</strong>
+                <small>registros</small>
+            </div>
+            <div class="kpi-card">
+                <span>Silver</span>
+                <strong>@FormatCount(_silverCount)</strong>
+                <small>registros</small>
+            </div>
+            <div class="kpi-card">
+                <span>Gold</span>
+                <strong>@FormatCount(_goldCount)</strong>
+                <small>voltas</small>
+            </div>
+        </div>
+    </div>
+    <div class="hero-media">
+        <div class="hero-illustration">
+            <img src="images/largada.png" alt="Carro de F1 em curva com outros carros ao fundo" />
+            <div class="hero-speed">
+                <span>VEL</span>
+                <strong>297</strong>
+                <em>km/h</em>
+            </div>
+        </div>
+        <div class="media-caption">Telemetria + MLflow + Data Lake, em sincronia.</div>
+    </div>
+</section>
+
+@code {
+    private const int MlflowLimit = 50;
+    private int? _healthLatencyMs;
+    private int? _activeJobs;
+    private int? _mlflowRuns;
+    private int? _bronzeCount;
+    private int? _silverCount;
+    private int? _goldCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var healthTask = LoadHealthLatencyAsync();
+        var jobsTask = LoadActiveJobsAsync();
+        var mlflowTask = LoadMlflowRunsAsync();
+        var catalogTask = LoadCatalogCountsAsync();
+
+        await Task.WhenAll(healthTask, jobsTask, mlflowTask, catalogTask);
+    }
+
+    private async Task LoadHealthLatencyAsync()
+    {
+        try
+        {
+            var stopwatch = Stopwatch.StartNew();
+            var result = await HealthApi.GetHealthAsync();
+            stopwatch.Stop();
+
+            if (result.IsSuccess)
+            {
+                _healthLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+            }
+        }
+        catch
+        {
+            _healthLatencyMs = null;
+        }
+    }
+
+    private async Task LoadActiveJobsAsync()
+    {
+        try
+        {
+            var result = await JobApi.GetRecentJobsAsync();
+            if (result.IsSuccess && result.Data is not null)
+            {
+                _activeJobs = result.Data.Count(job =>
+                    string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(job.Status, "pending", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        catch
+        {
+            _activeJobs = null;
+        }
+    }
+
+    private async Task LoadMlflowRunsAsync()
+    {
+        try
+        {
+            var result = await MlflowApi.GetRunsAsync(MlflowLimit);
+            if (result.IsSuccess && result.Data is not null)
+            {
+                _mlflowRuns = result.Data.Count;
+            }
+        }
+        catch
+        {
+            _mlflowRuns = null;
+        }
+    }
+
+    private async Task LoadCatalogCountsAsync()
+    {
+        try
+        {
+            var season = DateTimeOffset.Now.Year;
+            var bronzeTask = DataCatalogApi.GetBronzeAsync(season: season);
+            var silverTask = DataCatalogApi.GetSilverAsync(season: season);
+            var goldTask = DataCatalogApi.GetGoldAsync(season: season);
+
+            await Task.WhenAll(bronzeTask, silverTask, goldTask);
+
+            if (bronzeTask.Result.IsSuccess && bronzeTask.Result.Data is not null)
+            {
+                _bronzeCount = bronzeTask.Result.Data.Count;
+            }
+
+            if (silverTask.Result.IsSuccess && silverTask.Result.Data is not null)
+            {
+                _silverCount = silverTask.Result.Data.Count;
+            }
+
+            if (goldTask.Result.IsSuccess && goldTask.Result.Data is not null)
+            {
+                _goldCount = goldTask.Result.Data.Count;
+            }
+        }
+        catch
+        {
+            _bronzeCount = null;
+            _silverCount = null;
+            _goldCount = null;
+        }
+    }
+
+    private static string FormatCount(int? value) => value is null ? "-" : value.Value.ToString();
+
+    private static string FormatLatency(int? value) => value is null ? "-" : $"{value} ms";
+}
+
+<section class="home-grid">
+    <div class="home-card">
+        <h3>Catálogo por camadas</h3>
+        <p>Visibilidade total do pipeline de dados com filtros rápidos e exportação CSV.</p>
+        <a class="link" href="data-catalog">Abrir catálogo</a>
+    </div>
+    <div class="home-card">
+        <h3>Jobs sob controle</h3>
+        <p>Acompanhe execuções assíncronas, logs e estados críticos com refresh automático.</p>
+        <a class="link" href="jobs">Abrir jobs</a>
+    </div>
+    <div class="home-card">
+        <h3>MLflow & Artefatos</h3>
+        <p>Compare runs, métricas e parâmetros para acelerar iterações de modelos.</p>
+        <a class="link" href="mlflow">Abrir MLflow</a>
+    </div>
+    <div class="home-card">
+        <h3>MinIO & Data Lake</h3>
+        <p>Explore objetos e camadas com ações rápidas de copiar/abrir URI.</p>
+        <a class="link" href="minio">Abrir MinIO</a>
+    </div>
+    <div class="home-card">
+        <h3>Perguntas ao Gold</h3>
+        <p>Faça perguntas em linguagem natural com contexto por temporada e piloto.</p>
+        <a class="link" href="gold-questions">Abrir perguntas</a>
+    </div>
+    <div class="home-card">
+        <h3>Diagnósticos</h3>
+        <p>Teste dependências, health checks e variáveis críticas do backend.</p>
+        <a class="link" href="diagnostics">Abrir diagnósticos</a>
+    </div>
+</section>

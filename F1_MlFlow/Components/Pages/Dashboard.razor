@@ -1,0 +1,379 @@
+@page "/dashboard"
+@rendermode InteractiveServer
+@inject IHealthApiService HealthApi
+@inject IDataCatalogApiService DataCatalogApi
+@inject IJobApiService JobApi
+@inject IMlflowApiService MlflowApi
+@inject IMinioApiService MinioApi
+@inject IDriverProfileApiService DriverProfileApi
+@inject Microsoft.Extensions.Options.IOptions<BackendDependencySettings> BackendOptions
+@inject IUiCacheService UiCache
+
+<h1>Dashboard</h1>
+
+<LoadingBanner IsVisible="_loading" />
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <span class="text-muted">Visão geral operacional</span>
+    <div class="d-flex gap-2 align-items-center">
+        <span class="text-muted small">@LastLatencyLabel</span>
+        <button class="btn btn-sm btn-outline-primary" @onclick="@(() => LoadAsync(true))">Atualizar</button>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_errorMessage))
+{
+    <div class="alert alert-warning">@_errorMessage</div>
+}
+
+<div class="row g-3">
+    <div class="col-sm-6 col-lg-3"><KpiCard Title="Bronze" Value="@_summary.BronzeCount.ToString()" Subtitle="registros" /></div>
+    <div class="col-sm-6 col-lg-3"><KpiCard Title="Silver" Value="@_summary.SilverCount.ToString()" Subtitle="registros" /></div>
+    <div class="col-sm-6 col-lg-3"><KpiCard Title="Gold" Value="@_summary.GoldCount.ToString()" Subtitle="voltas" /></div>
+    <div class="col-sm-6 col-lg-3"><KpiCard Title="Meetings" Value="@_summary.MeetingsCount.ToString()" Subtitle="temporadas" /></div>
+    <div class="col-sm-6 col-lg-3"><KpiCard Title="Sessões" Value="@_summary.SessionsCount.ToString()" /></div>
+    <div class="col-sm-6 col-lg-3"><KpiCard Title="Pilotos" Value="@_summary.DriversCount.ToString()" /></div>
+    <div class="col-sm-6 col-lg-3"><KpiCard Title="Jobs em execução" Value="@_summary.RunningJobsCount.ToString()" /></div>
+    <div class="col-sm-6 col-lg-3"><KpiCard Title="Jobs concluídos" Value="@_summary.CompletedJobsCount.ToString()" /></div>
+    <div class="col-sm-6 col-lg-3"><KpiCard Title="Jobs com falha" Value="@_summary.FailedJobsCount.ToString()" /></div>
+    <div class="col-sm-6 col-lg-3"><KpiCard Title="MLflow runs" Value="@_summary.MlflowRunsCount.ToString()" /></div>
+    <div class="col-sm-6 col-lg-3"><KpiCard Title="Artefatos" Value="@_summary.ArtifactCount.ToString()" /></div>
+</div>
+
+<div class="row g-3 mt-1">
+    <div class="col-lg-6">
+        <HealthStatusPanel Title="Health da API" Status="@_healthStatus" />
+    </div>
+    <div class="col-lg-6">
+        <HealthStatusPanel Title="Dependências" Dependencies="@_dependencies" />
+    </div>
+</div>
+
+<div class="row g-3 mt-1">
+    <div class="col-lg-7">
+        <RecentJobsPanel Jobs="@_recentJobs" />
+    </div>
+    <div class="col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <strong>Últimas operações MinIO</strong>
+                @if (_minioObjects.Count == 0)
+                {
+                    <div class="text-muted mt-2">Nenhum objeto encontrado.</div>
+                }
+                else
+                {
+                    <div class="table-responsive mt-2">
+                        <table class="table table-sm">
+                            <thead>
+                                <tr>
+                                    <th>Bucket</th>
+                                    <th>Objeto</th>
+                                    <th>Camada</th>
+                                    <th>Atualizado</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var item in _minioObjects.Take(5))
+                                {
+                                    <tr>
+                                        <td>@item.Bucket</td>
+                                        <td>@item.ObjectName</td>
+                                        <td>@item.Layer</td>
+                                        <td>@item.LastModified?.ToLocalTime().ToString("g")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mt-1">
+    <div class="col-lg-6">
+        <GoldQualityPanel Summary="@_goldQuality" />
+    </div>
+    <div class="col-lg-6">
+        <DriverRankingPanel Profiles="@_driverProfiles" />
+    </div>
+</div>
+
+<div class="row g-3 mt-1">
+    <div class="col-lg-12">
+        <BackendDependenciesPanel Settings="@BackendOptions.Value" />
+    </div>
+</div>
+
+<div class="row g-3 mt-1">
+    <div class="col-lg-12">
+        <AdminGuard>
+            <DependencyTestPanel />
+        </AdminGuard>
+    </div>
+</div>
+
+@code {
+    private readonly DashboardSummaryDto _summary = new();
+    private HealthStatusDto? _healthStatus;
+    private List<HealthDependencyDto> _dependencies = new();
+    private List<JobSummaryDto> _recentJobs = new();
+    private List<MinioObjectDto> _minioObjects = new();
+    private List<GoldRowDto> _goldRows = new();
+    private GoldQualitySummaryDto? _goldQuality;
+    private List<DriverProfileDto> _driverProfiles = new();
+    private string? _errorMessage;
+    private bool _loading;
+    private readonly TimeSpan _cacheDuration = TimeSpan.FromSeconds(30);
+    private DateTimeOffset? _lastLoadedAt;
+    private int? _lastLatencyMs;
+
+    protected override Task OnInitializedAsync()
+    {
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadAsync();
+        }
+    }
+
+    private async Task LoadAsync(bool force = false)
+    {
+        TryRestoreCache();
+        if (!force && ShouldUseCache())
+        {
+            return;
+        }
+
+        _loading = true;
+        _errorMessage = null;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        try
+        {
+            var healthResult = await HealthApi.GetHealthAsync();
+            if (healthResult.IsSuccess)
+            {
+                _healthStatus = healthResult.Data;
+            }
+            else
+            {
+                _errorMessage = healthResult.ErrorMessage;
+            }
+
+            var dependencyResult = await HealthApi.GetDependenciesAsync();
+            if (dependencyResult.IsSuccess && dependencyResult.Data is not null)
+            {
+                _dependencies = dependencyResult.Data.ToList();
+            }
+
+            var jobsResult = await JobApi.GetRecentJobsAsync();
+            if (jobsResult.IsSuccess && jobsResult.Data is not null)
+            {
+                _recentJobs = jobsResult.Data.ToList();
+            }
+
+            _summary.RunningJobsCount = _recentJobs.Count(job => string.Equals(job.Status, "running", StringComparison.OrdinalIgnoreCase));
+            _summary.CompletedJobsCount = _recentJobs.Count(job => string.Equals(job.Status, "completed", StringComparison.OrdinalIgnoreCase));
+            _summary.FailedJobsCount = _recentJobs.Count(job => string.Equals(job.Status, "failed", StringComparison.OrdinalIgnoreCase));
+
+            var season = DateTimeOffset.Now.Year;
+            var bronzeResult = await DataCatalogApi.GetBronzeAsync(season: season);
+            if (bronzeResult.IsSuccess && bronzeResult.Data is not null)
+            {
+                _summary.BronzeCount = bronzeResult.Data.Count;
+            }
+
+            var silverResult = await DataCatalogApi.GetSilverAsync(season: season);
+            if (silverResult.IsSuccess && silverResult.Data is not null)
+            {
+                _summary.SilverCount = silverResult.Data.Count;
+            }
+
+            var goldResult = await DataCatalogApi.GetGoldAsync(season: season);
+            if (goldResult.IsSuccess && goldResult.Data is not null)
+            {
+                _goldRows = goldResult.Data.ToList();
+                _summary.GoldCount = _goldRows.Count;
+                _summary.MeetingsCount = _goldRows.Select(row => row.MeetingKey).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct().Count();
+                _summary.SessionsCount = _goldRows.Select(row => row.SessionKey).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct().Count();
+                _summary.DriversCount = _goldRows.Select(row => row.DriverNumber).Where(value => value.HasValue).Distinct().Count();
+                _goldQuality = BuildGoldQualitySummary(_goldRows);
+            }
+
+            var mlflowResult = await MlflowApi.GetRunsAsync(50);
+            if (mlflowResult.IsSuccess && mlflowResult.Data is not null)
+            {
+                _summary.MlflowRunsCount = mlflowResult.Data.Count;
+                _summary.ArtifactCount = mlflowResult.Data.SelectMany(run => run.Artifacts).Count();
+            }
+
+            var minioResult = await MinioApi.GetObjectsAsync();
+            if (minioResult.IsSuccess && minioResult.Data is not null)
+            {
+                _minioObjects = minioResult.Data.OrderByDescending(item => item.LastModified).ToList();
+            }
+
+            var profilesResult = await DriverProfileApi.GetProfilesAsync();
+            if (profilesResult.IsSuccess && profilesResult.Data is not null)
+            {
+                _driverProfiles = profilesResult.Data.ToList();
+            }
+
+            _summary.CheckedAt = DateTimeOffset.Now;
+            _lastLoadedAt = DateTimeOffset.Now;
+            SaveCache();
+        }
+        finally
+        {
+            stopwatch.Stop();
+            _lastLatencyMs = (int)stopwatch.ElapsedMilliseconds;
+            _loading = false;
+        }
+    }
+
+    private static GoldQualitySummaryDto BuildGoldQualitySummary(List<GoldRowDto> rows)
+    {
+        if (rows.Count == 0)
+        {
+            return new GoldQualitySummaryDto();
+        }
+
+        var nullCount = rows.Count(row => row.LapDuration is null);
+        var validLaps = rows.Count(row => row.HasTelemetry == true);
+        var discarded = rows.Count - validLaps;
+
+        var summary = new GoldQualitySummaryDto
+        {
+            Rows = rows.Count,
+            NullPct = rows.Count > 0 ? (double)nullCount / rows.Count * 100d : null,
+            ValidLaps = validLaps,
+            DiscardedLaps = discarded
+        };
+
+        summary.Groups = rows
+            .GroupBy(row => new { row.Season, row.MeetingName, row.SessionName })
+            .Select(group => new GoldQualityGroupDto
+            {
+                Season = group.Key.Season,
+                Meeting = group.Key.MeetingName,
+                Session = group.Key.SessionName,
+                Rows = group.Count(),
+                NullPct = group.Count() > 0 ? (double)group.Count(row => row.LapDuration is null) / group.Count() * 100d : null,
+                ValidLaps = group.Count(row => row.HasTelemetry == true),
+                DiscardedLaps = group.Count(row => row.HasTelemetry != true)
+            })
+            .OrderByDescending(group => group.Rows)
+            .Take(10)
+            .ToList();
+
+        return summary;
+    }
+
+    private bool ShouldUseCache()
+    {
+        if (_lastLoadedAt is null || !string.IsNullOrWhiteSpace(_errorMessage))
+        {
+            return false;
+        }
+
+        return DateTimeOffset.Now - _lastLoadedAt.Value < _cacheDuration;
+    }
+
+    private string LastLatencyLabel => _lastLatencyMs is null ? "Latência: -" : $"Latência: {_lastLatencyMs} ms";
+
+    private void TryRestoreCache()
+    {
+        if (_lastLoadedAt is not null)
+        {
+            return;
+        }
+
+        if (UiCache.TryGet("dashboard", out DashboardCacheEntry? cached, out var cachedLatency, out var cachedAt) && cached is not null)
+        {
+            ApplySummary(cached.Summary);
+            _healthStatus = cached.HealthStatus;
+            _dependencies = cached.Dependencies.ToList();
+            _recentJobs = cached.RecentJobs.ToList();
+            _minioObjects = cached.MinioObjects.ToList();
+            _goldQuality = cached.GoldQuality;
+            _driverProfiles = cached.DriverProfiles.ToList();
+            _lastLoadedAt = cachedAt;
+            _lastLatencyMs = cachedLatency;
+        }
+    }
+
+    private void SaveCache()
+    {
+        if (_lastLoadedAt is null)
+        {
+            return;
+        }
+
+        var entry = new DashboardCacheEntry
+        {
+            Summary = CloneSummary(_summary),
+            HealthStatus = _healthStatus,
+            Dependencies = _dependencies.ToList(),
+            RecentJobs = _recentJobs.ToList(),
+            MinioObjects = _minioObjects.ToList(),
+            GoldQuality = _goldQuality,
+            DriverProfiles = _driverProfiles.ToList()
+        };
+
+        UiCache.Set("dashboard", entry, _lastLatencyMs, _lastLoadedAt.Value);
+    }
+
+    private void ApplySummary(DashboardSummaryDto source)
+    {
+        _summary.BronzeCount = source.BronzeCount;
+        _summary.SilverCount = source.SilverCount;
+        _summary.GoldCount = source.GoldCount;
+        _summary.MeetingsCount = source.MeetingsCount;
+        _summary.SessionsCount = source.SessionsCount;
+        _summary.DriversCount = source.DriversCount;
+        _summary.RunningJobsCount = source.RunningJobsCount;
+        _summary.CompletedJobsCount = source.CompletedJobsCount;
+        _summary.FailedJobsCount = source.FailedJobsCount;
+        _summary.MlflowRunsCount = source.MlflowRunsCount;
+        _summary.ArtifactCount = source.ArtifactCount;
+        _summary.CheckedAt = source.CheckedAt;
+    }
+
+    private static DashboardSummaryDto CloneSummary(DashboardSummaryDto source)
+    {
+        return new DashboardSummaryDto
+        {
+            BronzeCount = source.BronzeCount,
+            SilverCount = source.SilverCount,
+            GoldCount = source.GoldCount,
+            MeetingsCount = source.MeetingsCount,
+            SessionsCount = source.SessionsCount,
+            DriversCount = source.DriversCount,
+            RunningJobsCount = source.RunningJobsCount,
+            CompletedJobsCount = source.CompletedJobsCount,
+            FailedJobsCount = source.FailedJobsCount,
+            MlflowRunsCount = source.MlflowRunsCount,
+            ArtifactCount = source.ArtifactCount,
+            CheckedAt = source.CheckedAt
+        };
+    }
+
+    private sealed class DashboardCacheEntry
+    {
+        public DashboardSummaryDto Summary { get; init; } = new();
+        public HealthStatusDto? HealthStatus { get; init; }
+        public List<HealthDependencyDto> Dependencies { get; init; } = new();
+        public List<JobSummaryDto> RecentJobs { get; init; } = new();
+        public List<MinioObjectDto> MinioObjects { get; init; } = new();
+        public GoldQualitySummaryDto? GoldQuality { get; init; }
+        public List<DriverProfileDto> DriverProfiles { get; init; } = new();
+    }
+
+}

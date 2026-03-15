@@ -1,0 +1,59 @@
+@using F1_MlFlow.Models.Mlflow
+
+<div class="table-responsive">
+    <table class="table table-hover">
+        <thead>
+            <tr>
+                <th></th>
+                <th>Run</th>
+                <th>Experimento</th>
+                <th>Status</th>
+                <th>Início</th>
+                <th>Duração</th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (Runs.Count == 0)
+            {
+                <tr>
+                    <td colspan="6" class="text-muted">Nenhuma run encontrada.</td>
+                </tr>
+            }
+            else
+            {
+                @foreach (var run in Runs)
+                {
+                    <tr>
+                        <td>
+                            <input type="checkbox" id="run-@run.RunId" name="run-@run.RunId" checked="@IsSelected(run.RunId)" @onchange="() => OnToggleSelection.InvokeAsync(run.RunId)" />
+                        </td>
+                        <td>@run.RunName</td>
+                        <td>@run.ExperimentName</td>
+                        <td><span class="badge @GetStatusClass(run.Status)">@run.Status</span></td>
+                        <td>@run.StartTime?.ToLocalTime().ToString("g")</td>
+                        <td>@(run.Duration?.ToString("0") ?? "-") s</td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<MlflowRunDto> Runs { get; set; } = Array.Empty<MlflowRunDto>();
+    [Parameter] public IReadOnlyCollection<string> SelectedRunIds { get; set; } = Array.Empty<string>();
+    [Parameter] public EventCallback<string> OnToggleSelection { get; set; }
+
+    private bool IsSelected(string runId) => SelectedRunIds.Contains(runId);
+
+    private static string GetStatusClass(string? status)
+    {
+        return status?.ToLowerInvariant() switch
+        {
+            "finished" => "bg-success",
+            "failed" => "bg-danger",
+            "running" => "bg-info",
+            _ => "bg-secondary"
+        };
+    }
+}

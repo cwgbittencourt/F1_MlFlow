@@ -1,0 +1,51 @@
+@using F1_MlFlow.Models.Jobs
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <strong>Detalhes do job</strong>
+        @if (Job is null)
+        {
+            <div class="text-muted mt-2">Selecione um job para ver os detalhes.</div>
+        }
+        else
+        {
+            <dl class="row mt-2">
+                <dt class="col-sm-4">ID</dt>
+                <dd class="col-sm-8">@Job.JobId</dd>
+                <dt class="col-sm-4">Tipo</dt>
+                <dd class="col-sm-8">@Job.JobType</dd>
+                <dt class="col-sm-4">Status</dt>
+                <dd class="col-sm-8"><span class="badge @GetStatusClass(Job.Status)">@Job.Status</span></dd>
+                <dt class="col-sm-4">Criado</dt>
+                <dd class="col-sm-8">@Job.CreatedAt?.ToLocalTime().ToString("g")</dd>
+                <dt class="col-sm-4">Início</dt>
+                <dd class="col-sm-8">@Job.StartedAt?.ToLocalTime().ToString("g")</dd>
+                <dt class="col-sm-4">Finalizado</dt>
+                <dd class="col-sm-8">@Job.FinishedAt?.ToLocalTime().ToString("g")</dd>
+                <dt class="col-sm-4">Parâmetros</dt>
+                <dd class="col-sm-8">@Job.Params</dd>
+                <dt class="col-sm-4">Filtros</dt>
+                <dd class="col-sm-8">@Job.Filters</dd>
+                <dt class="col-sm-4">Última mensagem</dt>
+                <dd class="col-sm-8">@Job.LastMessage</dd>
+            </dl>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public JobDetailsDto? Job { get; set; }
+
+    private static string GetStatusClass(string? status)
+    {
+        return status?.ToLowerInvariant() switch
+        {
+            "running" => "bg-info",
+            "completed" => "bg-success",
+            "failed" => "bg-danger",
+            "waiting" => "bg-info",
+            "pending" => "bg-secondary",
+            _ => "bg-secondary"
+        };
+    }
+}

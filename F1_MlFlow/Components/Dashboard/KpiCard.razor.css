@@ -1,0 +1,18 @@
+.kpi-card {
+    min-height: 110px;
+}
+
+.kpi-title {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.kpi-value {
+    font-size: 1.6rem;
+    font-weight: 600;
+}
+
+.kpi-subtitle {
+    font-size: 0.8rem;
+}
